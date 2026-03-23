@@ -145,6 +145,7 @@ export default function Dashboard() {
   const lastStatesRef = useRef<Record<string, Record<string, boolean>>>({}); // { deviceId: { geofenceId: isInside } }
   
   const [authChecked, setAuthChecked] = useState(false);
+  const lastSavedSettings = useRef<any>(null);
   const [session, setSession] = useState<any>(null);
   const router = useRouter();
 
@@ -228,6 +229,7 @@ export default function Dashboard() {
           setGeofenceAlertsEnabled(settings.geofence_alerts_enabled !== false);
           if (settings.fuel_cost) setFuelCost(settings.fuel_cost);
           if (settings.telegram_chat_id) setTelegramId(String(settings.telegram_chat_id));
+          lastSavedSettings.current = settings;
         }
         
         setAuthChecked(true);
@@ -239,8 +241,17 @@ export default function Dashboard() {
   useEffect(() => {
     if (!authChecked || !session) return;
 
+    // Only save if something actually changed from what we last loaded/saved
+    if (lastSavedSettings.current &&
+        fuelCost === lastSavedSettings.current.fuel_cost &&
+        telegramId === (lastSavedSettings.current.telegram_chat_id || "") &&
+        speedAlertsEnabled === (lastSavedSettings.current.speed_alerts_enabled !== false) &&
+        geofenceAlertsEnabled === (lastSavedSettings.current.geofence_alerts_enabled !== false)) {
+      return;
+    }
+
     const timer = setTimeout(async () => {
-      await supabase
+      const { data, error } = await supabase
         .from("user_settings")
         .upsert({ 
           user_id: session.user.id, 
@@ -248,8 +259,16 @@ export default function Dashboard() {
           telegram_chat_id: telegramId,
           speed_alerts_enabled: speedAlertsEnabled,
           geofence_alerts_enabled: geofenceAlertsEnabled
-        });
-    }, 1500);
+        }, { onConflict: 'user_id' })
+        .select()
+        .single();
+      
+      if (!error && data) {
+        lastSavedSettings.current = data;
+      } else if (error) {
+        console.error("Settings save error:", error);
+      }
+    }, 2000); // 2s debounce
 
     return () => clearTimeout(timer);
   }, [fuelCost, telegramId, speedAlertsEnabled, geofenceAlertsEnabled, session, authChecked]);
@@ -615,7 +634,7 @@ export default function Dashboard() {
         telegram_chat_id: telegramId.trim(),
         speed_alerts_enabled: speedAlertsEnabled, // Preserve other settings
         geofence_alerts_enabled: geofenceAlertsEnabled
-      });
+      }, { onConflict: 'user_id' });
     
     if (!error) {
       alert("Telegram Link Updated!");
