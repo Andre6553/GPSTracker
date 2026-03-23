@@ -423,6 +423,59 @@ export default function Dashboard() {
   const estimatedFuel = fuelRate > 0 ? totalDistanceKm / fuelRate : 0;
   const estimatedCost = estimatedFuel * fuelCost;
 
+  // TODAY'S LIVE STATS (from selectedHistory filtered for current day)
+  const todayStats = useMemo(() => {
+    if (!selectedDeviceId || selectedHistory.length === 0) return null;
+    
+    const now = new Date();
+    const todayStr = now.toISOString().split('T')[0];
+    const todayPnts = selectedHistory.filter(p => p.created_at.startsWith(todayStr));
+    
+    if (todayPnts.length === 0) return null;
+
+    let dist = 0;
+    let maxSpd = 0;
+    let sumSpd = 0;
+    let movingSec = 0;
+    let stoppedSec = 0;
+
+    for (let i = 0; i < todayPnts.length; i++) {
+      const p = todayPnts[i];
+      if (p.speed_kmh > maxSpd) maxSpd = p.speed_kmh;
+      sumSpd += p.speed_kmh;
+
+      if (i > 0) {
+        const prev = todayPnts[i-1];
+        const segDist = haversineKm(prev.lat, prev.lon, p.lat, p.lon);
+        if (segDist < 2) dist += segDist;
+
+        const start = ensureUTC(prev.created_at);
+        const end = ensureUTC(p.created_at);
+        const diff = (end.getTime() - start.getTime()) / 1000;
+        const validGap = Math.min(diff, 3600);
+
+        if (p.speed_kmh > 5) movingSec += validGap;
+        else stoppedSec += validGap;
+      }
+    }
+
+    const formatTime = (sec: number) => {
+      if (sec <= 0) return "0s";
+      if (sec < 60) return `${Math.round(sec)}s`;
+      if (sec < 3600) return `${Math.floor(sec/60)}m ${Math.round(sec%60)}s`;
+      return `${Math.floor(sec/3600)}h ${Math.floor((sec%3600)/60)}m`;
+    };
+
+    return {
+      distance: dist,
+      maxSpeed: maxSpd,
+      avgSpeed: sumSpd / todayPnts.length,
+      movingTime: formatTime(movingSec),
+      stoppedTime: formatTime(stoppedSec),
+      totalTime: formatTime(movingSec + stoppedSec)
+    };
+  }, [selectedHistory, selectedDeviceId]);
+
   const isOverSpeed = currentPnt ? currentPnt.speed_kmh > speedLimit : false;
 
   // CSV Export
@@ -640,12 +693,56 @@ export default function Dashboard() {
                        <div className={`w-2 h-2 rounded-full ${lastHeard[selectedDeviceId] && (new Date().getTime() - ensureUTC(lastHeard[selectedDeviceId]).getTime() < 120000) ? "bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]" : "bg-slate-600"}`} />
                        <span className="text-xs font-bold">{lastHeard[selectedDeviceId] && (new Date().getTime() - ensureUTC(lastHeard[selectedDeviceId]).getTime() < 120000) ? "ONLINE" : "OFFLINE"}</span>
                     </div>
+                    {lastHeard[selectedDeviceId] && (
+                      <span className="text-[9px] text-slate-500 mt-1 block italic">
+                        Seen: {formatDistanceToNow(ensureUTC(lastHeard[selectedDeviceId]), { addSuffix: true })}
+                      </span>
+                    )}
                   </div>
                   <div className="bg-slate-800/80 p-3 rounded-xl border border-slate-700">
                     <span className="text-[9px] text-slate-500 uppercase font-bold block mb-1">Signal</span>
                     <span className="text-xs font-bold">{currentPnt?.satellites || 0} Sats</span>
                   </div>
                 </div>
+
+                {/* Today's Summary Section */}
+                {todayStats && (
+                  <div className="bg-blue-600/5 border border-blue-500/20 p-4 rounded-2xl flex flex-col gap-4 animate-in slide-in-from-bottom-2 duration-500">
+                    <div className="flex items-center justify-between border-b border-blue-500/20 pb-2">
+                       <h3 className="text-[10px] font-black text-blue-400 uppercase tracking-widest flex items-center gap-2">
+                         <TrendingUp className="w-3.5 h-3.5" /> Today's Summary
+                       </h3>
+                       <span className="text-[9px] text-slate-500 font-bold">{new Date().toLocaleDateString()}</span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="flex flex-col">
+                        <span className="text-[9px] text-slate-500 uppercase font-bold">Trip Distance</span>
+                        <span className="text-lg font-black text-white">{todayStats.distance.toFixed(1)} <span className="text-[10px] font-normal text-slate-500">km</span></span>
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-[9px] text-slate-500 uppercase font-bold text-red-400">Max Speed</span>
+                        <span className="text-lg font-black text-white">{todayStats.maxSpeed.toFixed(0)} <span className="text-[10px] font-normal text-slate-500">km/h</span></span>
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-[9px] text-slate-500 uppercase font-bold">Avg Speed</span>
+                        <span className="text-lg font-black text-white">{todayStats.avgSpeed.toFixed(0)} <span className="text-[10px] font-normal text-slate-500">km/h</span></span>
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-[9px] text-slate-500 uppercase font-bold">Moving Time</span>
+                        <span className="text-lg font-black text-white">{todayStats.movingTime}</span>
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-[9px] text-slate-500 uppercase font-bold text-blue-400">Idle Today</span>
+                        <span className="text-lg font-black text-white">{todayStats.stoppedTime}</span>
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-[9px] text-slate-500 uppercase font-bold">Total Time</span>
+                        <span className="text-lg font-black text-white">{todayStats.totalTime}</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
