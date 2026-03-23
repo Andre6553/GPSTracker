@@ -823,8 +823,9 @@ export default function Dashboard() {
                             >
                               <div className="flex justify-between items-center font-bold">
                                 <span>Option {i + 1}: {r.summary}</span>
-                                <span>{r.duration}</span>
+                                <span className="text-emerald-400">{r.distance}</span>
                               </div>
+                              <div className="text-[9px] text-slate-500 mt-0.5 font-medium uppercase tracking-tighter">Approx. {r.duration} travel time</div>
                             </button>
                           ))}
                         </div>
