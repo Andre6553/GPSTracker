@@ -376,9 +376,46 @@ export default function Dashboard() {
     }
   };
 
+  const currentPnt = selectedHistory.length > 0 ? selectedHistory[selectedHistory.length - 1] : null;
+
+  // Update ETA and Route when destination or selected car changes
+  useEffect(() => {
+    if (!selectedCoords || !currentPnt) {
+      setAlternativeRoutes([]);
+      setEtaInfo(null);
+      return;
+    }
+
+    async function getRoute() {
+      if (!selectedCoords || !currentPnt) return;
+      setIsRouting(true);
+      try {
+        const query = await fetch(
+          `https://api.mapbox.com/directions/v5/mapbox/driving/${currentPnt.lon},${currentPnt.lat};${selectedCoords[0]},${selectedCoords[1]}?alternatives=true&geometries=geojson&access_token=${mapboxgl.accessToken}`
+        );
+        const json = await query.json();
+        if (json.routes && json.routes.length > 0) {
+          const routes = json.routes.map((r: any) => ({
+            distance: (r.distance / 1000).toFixed(1) + " km",
+            duration: Math.round(r.duration / 60) + " min",
+            arrivalTime: format(new Date(Date.now() + r.duration * 1000), "HH:mm"),
+            summary: r.summary || "Route",
+            routeLine: r.geometry.coordinates.map((c: any) => [c[1], c[0]]) as [number, number][],
+          }));
+          setAlternativeRoutes(routes);
+          setEtaInfo(routes[selectedRouteIndex] || routes[0]);
+        }
+      } catch (e) {
+        console.error("Route error:", e);
+      } finally {
+        setIsRouting(false);
+      }
+    }
+    getRoute();
+  }, [selectedCoords, currentPnt, selectedRouteIndex]);
+
   const activeDevices = assignedDevices;
   const fleetLatest = allData;
-  const currentPnt = selectedHistory.length > 0 ? selectedHistory[selectedHistory.length - 1] : null;
 
   // Stats Calculations
   const totalDistanceKm = useMemo(() => {
@@ -742,6 +779,57 @@ export default function Dashboard() {
                         <span className="text-lg font-black text-white">{todayStats.totalTime}</span>
                       </div>
                     </div>
+                  </div>
+                )}
+
+                {/* ACTIVE ROUTE / TRIP INFO */}
+                {alternativeRoutes.length > 0 && etaInfo && (
+                  <div className="bg-emerald-600/5 border border-emerald-500/20 p-4 rounded-2xl flex flex-col gap-4 animate-in slide-in-from-bottom-2 duration-500">
+                    <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
+                       <h3 className="text-[10px] font-black text-emerald-400 uppercase tracking-widest flex items-center gap-2">
+                         <Route className="w-3.5 h-3.5" /> Active Route
+                       </h3>
+                       <button onClick={() => { setSelectedCoords(null); setDestination(""); setAlternativeRoutes([]); setEtaInfo(null); }} className="text-[10px] text-emerald-500 hover:text-white font-bold uppercase transition-colors">Clear</button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="flex flex-col">
+                        <span className="text-[9px] text-slate-500 uppercase font-bold">Trip Distance</span>
+                        <span className="text-lg font-black text-white">{etaInfo.distance}</span>
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-[9px] text-slate-500 uppercase font-bold text-emerald-400">ETA / Arrival</span>
+                        <span className="text-lg font-black text-white">{etaInfo.arrivalTime}</span>
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-[9px] text-slate-500 uppercase font-bold">Travel Time</span>
+                        <span className="text-lg font-black text-white">{etaInfo.duration}</span>
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-[9px] text-slate-500 uppercase font-bold text-amber-500">Fuel Estimate</span>
+                        <span className="text-lg font-black text-white">R {(parseFloat(etaInfo.distance) / fuelRate * fuelCost).toFixed(2)}</span>
+                      </div>
+                    </div>
+
+                    {alternativeRoutes.length > 1 && (
+                      <div className="pt-2">
+                        <p className="text-[9px] text-slate-500 uppercase font-bold mb-2">Alternative Paths</p>
+                        <div className="flex flex-col gap-1.5">
+                          {alternativeRoutes.map((r, i) => (
+                            <button
+                              key={i}
+                              onClick={() => setSelectedRouteIndex(i)}
+                              className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-all border ${selectedRouteIndex === i ? 'bg-emerald-600/20 border-emerald-500 text-emerald-400' : 'bg-slate-800/40 border-slate-700/50 text-slate-500 hover:border-slate-600'}`}
+                            >
+                              <div className="flex justify-between items-center font-bold">
+                                <span>Option {i + 1}: {r.summary}</span>
+                                <span>{r.duration}</span>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
