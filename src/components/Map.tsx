@@ -197,7 +197,7 @@ export default function Map({
         source: "geofences",
         paint: {
           "fill-color": "#ef4444",
-          "fill-opacity": 0.1,
+          "fill-opacity": 0.25,
         },
       });
       map.addLayer({
@@ -205,9 +205,9 @@ export default function Map({
         type: "line",
         source: "geofences",
         paint: {
-          "line-color": "#ef4444",
-          "line-width": 2,
-          "line-dasharray": [3, 3],
+          "line-color": "#dc2626",
+          "line-width": 3,
+          "line-dasharray": [2, 2],
         },
       });
 
@@ -376,13 +376,13 @@ export default function Map({
           id: "geofences-fill",
           type: "fill",
           source: "geofences",
-          paint: { "fill-color": "#ef4444", "fill-opacity": 0.1 },
+          paint: { "fill-color": "#ef4444", "fill-opacity": 0.25 },
         });
         map.addLayer({
           id: "geofences-border",
           type: "line",
           source: "geofences",
-          paint: { "line-color": "#ef4444", "line-width": 2, "line-dasharray": [3, 3] },
+          paint: { "line-color": "#dc2626", "line-width": 3, "line-dasharray": [2, 2] },
         });
       }
 
@@ -714,11 +714,13 @@ export default function Map({
     if (!source) return;
 
     if (geofences.length > 0) {
+      console.log(`Map: Updating ${geofences.length} geofences...`);
       const features = geofences.map((gf) =>
-        createGeoJSONCircle([gf.lon, gf.lat], gf.radius_meters / 1000)
+        createGeoJSONCircle([gf.lon, gf.lat], Number(gf.radius_meters) / 1000)
       );
       source.setData({ type: "FeatureCollection", features });
     } else {
+      console.log("Map: Clearing geofences.");
       source.setData({ type: "FeatureCollection", features: [] });
     }
   }, [geofences, mapLoaded]);
