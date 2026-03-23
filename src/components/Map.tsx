@@ -573,7 +573,7 @@ export default function Map({
     if (target) {
       map.flyTo({ center: [target.lng, target.lat], speed: 1.2 });
     }
-  }, [selectedDeviceId, playbackPoint?.lat, playbackPoint?.lon, mapLoaded]);
+  }, [selectedDeviceId, playbackPoint?.lat, playbackPoint?.lon, mapLoaded, fleetLatest.find(c => c.device_id === selectedDeviceId)?.lat, fleetLatest.find(c => c.device_id === selectedDeviceId)?.lon]);
 
   // Update history trail - draw per-segment features so each carries a speed value_kmh property
   useEffect(() => {
