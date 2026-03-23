@@ -409,8 +409,12 @@ export default function Dashboard() {
   useEffect(() => {
     if (!authChecked || !session) return;
     async function loadGeofences() {
-      const { data } = await supabase.from("geofences").select("*").eq("user_id", session.user.id);
-      if (data) setGeofences(data as Geofence[]);
+      const { data, error } = await supabase.from("geofences").select("*").eq("user_id", session.user.id);
+      if (error) {
+        console.error("Error loading geofences:", error);
+      } else if (data) {
+        setGeofences(data as Geofence[]);
+      }
     }
     loadGeofences();
   }, [authChecked, session]);
@@ -425,7 +429,10 @@ export default function Dashboard() {
       radius_meters: geofenceRadius
     }).select();
 
-    if (!error && data) {
+    if (error) {
+      console.error("Error saving geofence:", error);
+      alert(`Failed to save zone: ${error.message}`);
+    } else if (data) {
       setGeofences(prev => [...prev, data[0] as Geofence]);
       setIsAddingGeofence(false);
       setNewGeofencePos(null);
