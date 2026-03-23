@@ -146,7 +146,7 @@ void loop() {
         if (gps.date.isValid() && gps.time.isValid()) {
           snprintf(ts, 32, "%04d-%02d-%02dT%02d:%02d:%02dZ", gps.date.year(), gps.date.month(), gps.date.day(), gps.time.hour(), gps.time.minute(), gps.time.second());
         }
-        f.printf("%s,%.6f,%.6f,%.1f\n", ts, gps.location.lat(), gps.location.lng(), gps.speed.kmph());
+        f.printf("%s,%.6f,%.6f,%.1f,%.1f,%d\n", ts, gps.location.lat(), gps.location.lng(), gps.speed.kmph(), gps.altitude.meters(), (int)gps.satellites.value());
         f.close();
       }
     }
@@ -194,9 +194,15 @@ void processOfflineSync() {
       String ts = line.substring(0, first);
       String lt = line.substring(first+1, second);
       String ln = line.substring(second+1, (third > 0 ? third : line.length()));
-      String sp = (third > 0 ? line.substring(third+1) : "0");
+      // New parser handle 6 columns: ts, lat, lon, spd, alt, sats
+      int fourth = line.indexOf(',', third+1);
+      int fifth = line.indexOf(',', fourth+1);
+      
+      String sp = (third > 0 ? line.substring(third+1, (fourth > 0 ? fourth : line.length())) : "0");
+      String al = (fourth > 0 ? line.substring(fourth+1, (fifth > 0 ? fifth : line.length())) : "0");
+      String sa = (fifth > 0 ? line.substring(fifth+1) : "0");
 
-      pushToSupabase(lt.toDouble(), ln.toDouble(), sp.toDouble(), 0, 0, (ts == "NO_TS" ? nullptr : ts.c_str()));
+      pushToSupabase(lt.toDouble(), ln.toDouble(), sp.toDouble(), al.toDouble(), sa.toInt(), (ts == "NO_TS" ? nullptr : ts.c_str()));
       count++;
       delay(10); // Small breath for WiFi task
       yield();   
@@ -227,9 +233,9 @@ void pushToSupabase(double lat, double lon, double speed, double alt, int sats, 
 
   char json[350];
   if (timestamp) {
-    snprintf(json, 350, "{\"device_id\":\"%s\",\"lat\":%.6f,\"lon\":%.6f,\"speed_kmh\":%.1f,\"altitude_m\":%.1f,\"created_at\":\"%s\"}", DEVICE_ID, lat, lon, speed, alt, timestamp);
+    snprintf(json, 350, "{\"device_id\":\"%s\",\"lat\":%.6f,\"lon\":%.6f,\"speed_kmh\":%.1f,\"altitude_m\":%.1f,\"satellites\":%d,\"created_at\":\"%s\"}", DEVICE_ID, lat, lon, speed, alt, sats, timestamp);
   } else {
-    snprintf(json, 350, "{\"device_id\":\"%s\",\"lat\":%.6f,\"lon\":%.6f,\"speed_kmh\":%.1f,\"altitude_m\":%.1f}", DEVICE_ID, lat, lon, speed, alt);
+    snprintf(json, 350, "{\"device_id\":\"%s\",\"lat\":%.6f,\"lon\":%.6f,\"speed_kmh\":%.1f,\"altitude_m\":%.1f,\"satellites\":%d}", DEVICE_ID, lat, lon, speed, alt, sats);
   }
 
   int code = http.POST(json);

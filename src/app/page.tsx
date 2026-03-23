@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import SpeedChart from "@/components/SpeedChart";
+import mapboxgl from "mapbox-gl";
 
 // Helper to ensure database timestamps are parsed as UTC
 const ensureUTC = (dateStr: string | undefined | null) => {
@@ -897,6 +898,24 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div className="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
+                  <h2 className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest flex items-center gap-2 mb-4">Trip Parameters</h2>
+                  <div className="grid grid-cols-2 gap-3 mb-4">
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-[10px] text-slate-500 uppercase font-bold">Speed Limit</span>
+                      <input type="number" value={speedLimit} onChange={e => setSpeedLimit(Number(e.target.value))} className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white" />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-[10px] text-slate-500 uppercase font-bold">Fuel Cost (R/L)</span>
+                      <input type="number" value={fuelCost} onChange={e => setFuelCost(Number(e.target.value))} className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white" />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-[10px] text-slate-500 uppercase font-bold">Fuel Rate (km/L)</span>
+                      <input type="number" value={fuelRate} onChange={e => setFuelRate(Number(e.target.value))} className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white" />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
                   <h2 className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest flex items-center gap-2 mb-3">Linked ({assignedDevices.length})</h2>
                   <div className="flex flex-col gap-2">
                     {assignedDevices.map(id => (
@@ -916,6 +935,53 @@ export default function Dashboard() {
 
       {/* Map Area */}
       <div className={`flex-1 p-2 lg:p-4 relative h-full ${isDarkMode ? 'bg-slate-950' : 'bg-slate-200'}`}>
+        
+        {/* Floating Search Bar */}
+        <div className="absolute top-6 left-1/2 -translate-x-1/2 z-[1000] w-full max-w-md px-4">
+          <div className="relative group">
+            <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none">
+              <Search className="w-4 h-4 text-slate-400 group-focus-within:text-blue-500 transition-colors" />
+            </div>
+            <input
+              type="text"
+              placeholder="Search destination or address..."
+              value={destination}
+              onChange={(e) => {
+                setDestination(e.target.value);
+                if (debounceRef.current) clearTimeout(debounceRef.current);
+                debounceRef.current = setTimeout(async () => {
+                  if (e.target.value.length > 2) {
+                    const res = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(e.target.value)}.json?access_token=${mapboxgl.accessToken}&limit=5`);
+                    const data = await res.json();
+                    setSuggestions(data.features || []);
+                    setShowSuggestions(true);
+                  }
+                }, 500);
+              }}
+              className="w-full bg-slate-900/90 backdrop-blur-md border border-slate-700/50 rounded-2xl pl-11 pr-4 py-3.5 text-sm text-white shadow-2xl shadow-black/50 focus:outline-none focus:border-blue-500/50 transition-all"
+            />
+            {showSuggestions && suggestions.length > 0 && (
+              <div className="absolute top-full left-0 right-0 mt-2 bg-slate-900/95 backdrop-blur-xl border border-slate-800 rounded-xl overflow-hidden shadow-2xl z-[1001] animate-in fade-in slide-in-from-top-2 duration-200">
+                {suggestions.map((s, i) => (
+                  <button
+                    key={i}
+                    onClick={() => {
+                      setDestination(s.place_name);
+                      setSelectedCoords(s.center);
+                      setShowSuggestions(false);
+                      setSuggestions([]);
+                    }}
+                    className="w-full text-left px-4 py-3 text-xs text-slate-300 hover:bg-blue-600 hover:text-white border-b border-slate-800/50 last:border-0 transition-colors flex items-center gap-3"
+                  >
+                    <MapPin className="w-3.5 h-3.5 text-blue-500" />
+                    <span className="truncate">{s.place_name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
         <LiveMap
           fleetLatest={fleetLatest}
           selectedDeviceId={selectedDeviceId}
