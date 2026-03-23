@@ -744,6 +744,33 @@ export default function Dashboard() {
                     </div>
                   </div>
                 )}
+
+                {/* TRIP PARAMETERS (Speed Limit, Fuel) moved here for visibility */}
+                <div className="bg-slate-800/80 p-4 rounded-xl border border-slate-700 mt-2">
+                  <h2 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 mb-3">
+                    <Settings className="w-3.5 h-3.5 text-blue-400" /> TRIP DEFAULTS
+                  </h2>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-[9px] text-slate-500 uppercase font-bold">Max Speed</span>
+                      <div className="flex items-center bg-slate-900 border border-slate-700 rounded-lg px-2 py-1">
+                        <input type="number" value={speedLimit} onChange={e => setSpeedLimit(Number(e.target.value))} className="w-full bg-transparent text-xs text-white focus:outline-none" />
+                        <span className="text-[10px] text-slate-500 ml-1">km/h</span>
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-[9px] text-slate-500 uppercase font-bold">Fuel Cost</span>
+                      <div className="flex items-center bg-slate-900 border border-slate-700 rounded-lg px-2 py-1">
+                        <span className="text-[10px] text-slate-500 mr-1">R</span>
+                        <input type="number" value={fuelCost} onChange={e => setFuelCost(Number(e.target.value))} className="w-full bg-transparent text-xs text-white focus:outline-none" />
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-1.5 col-span-2">
+                      <span className="text-[9px] text-slate-500 uppercase font-bold">Consumption (km/L)</span>
+                      <input type="number" value={fuelRate} onChange={e => setFuelRate(Number(e.target.value))} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white" />
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -894,23 +921,6 @@ export default function Dashboard() {
                       >
                         {isLinkingTelegram ? "..." : "Link"}
                       </button>
-                    </div>
-                  </div>
-                </div>
-                <div className="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
-                  <h2 className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest flex items-center gap-2 mb-4">Trip Parameters</h2>
-                  <div className="grid grid-cols-2 gap-3 mb-4">
-                    <div className="flex flex-col gap-1.5">
-                      <span className="text-[10px] text-slate-500 uppercase font-bold">Speed Limit</span>
-                      <input type="number" value={speedLimit} onChange={e => setSpeedLimit(Number(e.target.value))} className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white" />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                      <span className="text-[10px] text-slate-500 uppercase font-bold">Fuel Cost (R/L)</span>
-                      <input type="number" value={fuelCost} onChange={e => setFuelCost(Number(e.target.value))} className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white" />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                      <span className="text-[10px] text-slate-500 uppercase font-bold">Fuel Rate (km/L)</span>
-                      <input type="number" value={fuelRate} onChange={e => setFuelRate(Number(e.target.value))} className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white" />
                     </div>
                   </div>
                 </div>
