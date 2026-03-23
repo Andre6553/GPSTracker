@@ -106,8 +106,16 @@ export async function POST(req: NextRequest) {
     else if (text === "/groupid") {
       await sendTelegram(chatId, `🆔 Chat ID: <code>${chatId}</code>`);
     }
-    else if (text === "/start") {
-      await sendTelegram(chatId, "👋 <b>Fleet Control</b>\n\n/findme - Locate\n/killon - Kill Relay\n/killoff - Restore Relay\n/status - Check settings");
+    else if (text === "/start" || text === "/help") {
+      const helpMsg = `🤖 <b>Fleet Control Assistant</b>
+
+/findme - Get current location
+/killon - Remotely disable vehicle
+/killoff - Remotely enable vehicle
+/status - Check alert settings
+/groupid - Get Chat ID for dashboard
+/help - Show this menu`;
+      await sendTelegram(chatId, helpMsg);
     }
     // Kill Switch Flow Starting Point
     else if (text === "/killon" || text === "/killoff") {
