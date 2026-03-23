@@ -470,15 +470,22 @@ export default function Dashboard() {
         );
         const json = await query.json();
         if (json.routes && json.routes.length > 0) {
-          const routes = json.routes.map((r: any) => ({
-            distance: (r.distance / 1000).toFixed(1) + " km",
-            duration: r.duration > 3600 
-              ? `${Math.floor(r.duration / 3600)}h ${Math.round((r.duration % 3600) / 60)}m` 
-              : `${Math.round(r.duration / 60)} min`,
-            arrivalTime: format(new Date(Date.now() + r.duration * 1000), "HH:mm"),
-            summary: r.summary || "Route",
-            routeLine: r.geometry.coordinates.map((c: any) => [c[1], c[0]]) as [number, number][],
-          }));
+          // Calculate a scaling factor: base 120km/h / user's speedLimit
+          // e.g. if limit is 150, factor is 0.8 (20% faster)
+          const speedFactor = 120 / (speedLimit || 120);
+          
+          const routes = json.routes.map((r: any) => {
+            const adjustedSec = r.duration * speedFactor;
+            return {
+              distance: (r.distance / 1000).toFixed(1) + " km",
+              duration: adjustedSec > 3600 
+                ? `${Math.floor(adjustedSec / 3600)}h ${Math.round((adjustedSec % 3600) / 60)}m` 
+                : `${Math.round(adjustedSec / 60)} min`,
+              arrivalTime: format(new Date(Date.now() + adjustedSec * 1000), "HH:mm"),
+              summary: r.summary || "Route",
+              routeLine: r.geometry.coordinates.map((c: any) => [c[1], c[0]]) as [number, number][],
+            };
+          });
           setAlternativeRoutes(routes);
           setEtaInfo(routes[selectedRouteIndex] || routes[0]);
         }
