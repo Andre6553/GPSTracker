@@ -235,6 +235,62 @@ export default function Dashboard() {
     });
   }, [router]);
 
+  // PERSISTENCE: Save Global Settings (Fuel Cost)
+  useEffect(() => {
+    if (!authChecked || !session) return;
+
+    const timer = setTimeout(async () => {
+      await supabase
+        .from("user_settings")
+        .upsert({ 
+          user_id: session.user.id, 
+          fuel_cost: fuelCost,
+          telegram_chat_id: telegramId,
+          speed_alerts_enabled: speedAlertsEnabled,
+          geofence_alerts_enabled: geofenceAlertsEnabled
+        });
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [fuelCost, telegramId, speedAlertsEnabled, geofenceAlertsEnabled, session, authChecked]);
+
+  // PERSISTENCE: Save Device Configs (Speed, Fuel Rate)
+  useEffect(() => {
+    if (!selectedDeviceId || !authChecked || !session) return;
+    
+    // Only save if the values are different from what we last loaded/saved for THIS device
+    const lastConfig = deviceConfigs[selectedDeviceId];
+    if (lastConfig && 
+        speedLimit === lastConfig.speed_limit && 
+        fuelRate === lastConfig.fuel_rate && 
+        fuelType === lastConfig.fuel_type) {
+      return; 
+    }
+
+    const timer = setTimeout(async () => {
+      await supabase
+        .from("user_devices")
+        .update({ 
+          speed_limit: speedLimit, 
+          fuel_rate: fuelRate, 
+          fuel_type: fuelType 
+        })
+        .match({ user_id: session.user.id, device_id: selectedDeviceId });
+        
+      // Update local cache so we don't re-trigger unless it changes again
+      setDeviceConfigs(prev => ({
+        ...prev,
+        [selectedDeviceId]: { 
+          speed_limit: speedLimit, 
+          fuel_rate: fuelRate, 
+          fuel_type: fuelType 
+        }
+      }));
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [speedLimit, fuelRate, fuelType, selectedDeviceId, session, authChecked, deviceConfigs]);
+
   // Sync Device Config to local state when selecting a car
   useEffect(() => {
     if (!selectedDeviceId || !deviceConfigs[selectedDeviceId]) return;
