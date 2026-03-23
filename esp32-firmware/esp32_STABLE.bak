@@ -1,0 +1,138 @@
+// =============================================================
+// ESP32 Car Tracker with Remote Kill Switch
+// =============================================================
+
+#include <WiFi.h>
+#include "Adafruit_MQTT.h"
+#include "Adafruit_MQTT_Client.h"
+#include <TinyGPS++.h>
+#include <HardwareSerial.h>
+#include <LittleFS.h>
+#include "secrets.h"
+
+// --- SETTINGS ---
+String deviceId = "ESP32-Car2";
+const int SYNC_INTERVAL_MS = 10000;
+const int HEARTBEAT_INTERVAL_MS = 60000;
+
+// --- HARDWARE ---
+HardwareSerial gpsSerial(2); // ESP32 UART2 (Pins 16/17 default)
+TinyGPSPlus gps;
+
+// --- MQTT ---
+WiFiClient client;
+Adafruit_MQTT_Client mqtt(&client, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_KEY);
+Adafruit_MQTT_Publish trackerFeed = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/cartracker");
+Adafruit_MQTT_Subscribe throttle = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/throttle2");
+
+// --- STATE ---
+unsigned long lastSync = 0;
+unsigned long lastHeartbeat = 0;
+bool isThrottled = false;
+unsigned long throttleStartTime = 0;
+
+void setup() {
+  Serial.begin(115200);
+  gpsSerial.begin(9600, SERIAL_8N1, 16, 17);
+
+  // Initialize Relay & NeoPixel
+  pinMode(RELAY_PIN, OUTPUT);
+  digitalWrite(RELAY_PIN, HIGH); // Default: Unlocked
+  // pixels.begin(); // Temporarily disabled to debug WiFi
+  // pixels.setPixelColor(0, pixels.Color(0, 255, 0)); 
+  // pixels.show();
+
+  WiFi.begin(WLAN_SSID, WLAN_PASS);
+  Serial.println("Connecting to WiFi...");
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
+    delay(500);
+    Serial.print(".");
+  }
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi Connected");
+  } else {
+    Serial.println("\nWiFi Timeout - Starting Offline");
+  }
+
+  mqtt.subscribe(&throttle);
+}
+
+void loop() {
+  MQTT_connect();
+
+  // Read GPS
+  while (gpsSerial.available() > 0) {
+    gps.encode(gpsSerial.read());
+  }
+
+  // Handle Commands
+  Adafruit_MQTT_Subscribe *subscription;
+  while ((subscription = mqtt.readSubscription(10))) {
+    if (subscription == &throttle) {
+      char *cmd = (char *)throttle.lastread;
+      Serial.print("\n[COMMAND] Received: ");
+      Serial.println(cmd);
+
+      if (strcmp(cmd, "LOCK") == 0) {
+        Serial.println("[ACTION] LOCKING VEHICLE...");
+        // digitalWrite(RELAY_PIN, LOW); // Trigger relay
+        // pixels.setPixelColor(0, pixels.Color(255, 0, 0)); // RED
+        // pixels.show();
+        // isLocked = true;
+      } else if (strcmp(cmd, "UNLOCK") == 0) {
+        Serial.println("[ACTION] UNLOCKING VEHICLE...");
+        // digitalWrite(RELAY_PIN, HIGH); // Restore
+        // pixels.setPixelColor(0, pixels.Color(0, 255, 0)); // GREEN
+        // pixels.show();
+        // isLocked = false;
+      } else if (strstr(cmd, "THROTTLED")) {
+        isThrottled = true;
+        throttleStartTime = millis();
+      }
+    }
+  }
+
+  // Send Telemetry
+  if (millis() - lastSync > SYNC_INTERVAL_MS) {
+    if (gps.location.isValid()) {
+      String data = String(gps.location.lat(), 6) + "," + 
+                    String(gps.location.lng(), 6) + "," + 
+                    String(gps.speed.kmph()) + "," + 
+                    String(gps.altitude.meters()) + "," + 
+                    String(gps.satellites.value()) + "," + 
+                    deviceId;
+      
+      if (trackerFeed.publish(data.c_str())) {
+        Serial.println("Telemetry Published: " + data);
+      }
+      lastSync = millis();
+    }
+  }
+
+  // Heartbeat
+  if (millis() - lastHeartbeat > HEARTBEAT_INTERVAL_MS) {
+    if (trackerFeed.publish("HEARTBEAT")) {
+      Serial.println("Heartbeat Sent");
+    }
+    lastHeartbeat = millis();
+  }
+
+  // Recovery from AIO throttling
+  if (isThrottled && (millis() - throttleStartTime > 60000)) {
+    isThrottled = false;
+  }
+}
+
+void MQTT_connect() {
+  if (mqtt.connected()) return;
+  int8_t ret;
+  uint8_t retries = 3;
+  while ((ret = mqtt.connect()) != 0) {
+    mqtt.disconnect();
+    delay(5000);
+    retries--;
+    if (retries == 0) break;
+  }
+}

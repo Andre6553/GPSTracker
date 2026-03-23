@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+.next/
+out/
+build/
+bin/
+obj/
+
+# Secrets & Config
+secrets.h
+.env
+.env.local
+.env.production
+.env.development
+.env.*.local
+*.pem
+credentials.json
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Arduino / PlatformIO
+.pio/
+.clang-format
+*.hex
+*.bin
+*.elf
