@@ -221,7 +221,7 @@ export default function Dashboard() {
           .from("user_settings")
           .select("*")
           .eq("user_id", activeSession.user.id)
-          .single();
+          .maybeSingle();
 
         if (settings) {
           setSpeedAlertsEnabled(settings.speed_alerts_enabled !== false);
