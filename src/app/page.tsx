@@ -472,7 +472,9 @@ export default function Dashboard() {
         if (json.routes && json.routes.length > 0) {
           const routes = json.routes.map((r: any) => ({
             distance: (r.distance / 1000).toFixed(1) + " km",
-            duration: Math.round(r.duration / 60) + " min",
+            duration: r.duration > 3600 
+              ? `${Math.floor(r.duration / 3600)}h ${Math.round((r.duration % 3600) / 60)}m` 
+              : `${Math.round(r.duration / 60)} min`,
             arrivalTime: format(new Date(Date.now() + r.duration * 1000), "HH:mm"),
             summary: r.summary || "Route",
             routeLine: r.geometry.coordinates.map((c: any) => [c[1], c[0]]) as [number, number][],
