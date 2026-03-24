@@ -42,7 +42,8 @@ HardwareSerial gpsSerial(2);
 unsigned long lastCloudPublish = 0;
 unsigned long lastDisplayUpdate = 0;
 unsigned long lastSyncCheck = 0;
-const unsigned long PUBLISH_INTERVAL = 10000;
+// GPS / cloud / LittleFS log cadence (smoother trails vs storage & bandwidth)
+const unsigned long PUBLISH_INTERVAL = 5000;
 const unsigned long SYNC_INTERVAL = 15000;
 size_t lastSyncOffset = 0;
 
