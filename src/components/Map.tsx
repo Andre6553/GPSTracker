@@ -226,13 +226,13 @@ export default function Map({
         id: "geofences-fill",
         type: "fill",
         source: "geofences",
-        paint: { "fill-color": "#ef4444", "fill-opacity": 0.25 },
+        paint: { "fill-color": "#ef4444", "fill-opacity": 0.5 },
       });
       map.addLayer({
         id: "geofences-border",
         type: "line",
         source: "geofences",
-        paint: { "line-color": "#dc2626", "line-width": 3, "line-dasharray": [2, 2] },
+        paint: { "line-color": "#ff0000", "line-width": 4 },
       });
 
       // Stop markers
@@ -423,13 +423,13 @@ export default function Map({
           id: "geofences-fill",
           type: "fill",
           source: "geofences",
-          paint: { "fill-color": "#ef4444", "fill-opacity": 0.25 },
+          paint: { "fill-color": "#ef4444", "fill-opacity": 0.5 },
         });
         map.addLayer({
           id: "geofences-border",
           type: "line",
           source: "geofences",
-          paint: { "line-color": "#dc2626", "line-width": 3, "line-dasharray": [2, 2] },
+          paint: { "line-color": "#ff0000", "line-width": 4 },
         });
       }
 
@@ -741,6 +741,11 @@ export default function Map({
     if (geofences.length > 0) {
       const features = geofences.map((gf) => createGeoJSONCircle([gf.lon, gf.lat], Number(gf.radius_meters) / 1000));
       s.setData({ type: "FeatureCollection", features });
+      
+      // Ensure geofences are ALWAYS on top immediately after update
+      if (map.getLayer("geofences-fill")) map.moveLayer("geofences-fill");
+      if (map.getLayer("history-trail-line")) map.moveLayer("history-trail-line"); // Path on top of fill
+      if (map.getLayer("geofences-border")) map.moveLayer("geofences-border"); // Border on top of path
     } else s.setData({ type: "FeatureCollection", features: [] });
   }, [geofences, mapLoaded]);
 
