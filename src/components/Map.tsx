@@ -443,7 +443,7 @@ export default function Map({
     map.on("click", handleClick);
     if (isAddingGeofence) map.getCanvas().style.cursor = "crosshair";
     else map.getCanvas().style.cursor = "";
-    return () => map.off("click", handleClick);
+    return () => { map.off("click", handleClick); };
   }, [onMapClick, isAddingGeofence]);
 
   useEffect(() => {
