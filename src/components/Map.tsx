@@ -122,13 +122,30 @@ export default function Map({
         source: "history-trail",
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
-          "line-color": "#facc15", // Solid Vibrant Yellow for absolute visibility
+          "line-color": "#facc15",
           "line-width": 8,
           "line-opacity": 0.95,
         },
       });
 
-      // Directional markers (circles to avoid triangle-11 icon error)
+      // Neon Beads (Circles for every GPS point to ensure visibility)
+      map.addSource("history-beads", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: "history-trail-beads",
+        type: "circle",
+        source: "history-beads",
+        paint: {
+          "circle-radius": 4,
+          "circle-color": "#ffffff",
+          "circle-stroke-width": 1.5,
+          "circle-stroke-color": "#facc15",
+        },
+      });
+
+      // Directional markers (circles)
       map.addSource("history-arrows", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
@@ -298,6 +315,24 @@ export default function Map({
             "line-color": "#facc15",
             "line-width": 8,
             "line-opacity": 0.95,
+          },
+        });
+      }
+
+      if (!map.getSource("history-beads")) {
+        map.addSource("history-beads", {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
+        map.addLayer({
+          id: "history-trail-beads",
+          type: "circle",
+          source: "history-beads",
+          paint: {
+            "circle-radius": 4,
+            "circle-color": "#ffffff",
+            "circle-stroke-width": 1.5,
+            "circle-stroke-color": "#facc15",
           },
         });
       }
@@ -553,47 +588,61 @@ export default function Map({
     if (!trailSource || !arrowSource) return;
 
     if (selectedHistory.length > 1) {
-      console.log("MAP UPDATING TRACE:", selectedHistory.length, "pts");
       const sortedHistory = [...selectedHistory].sort((a,b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
       
-      const features: GeoJSON.Feature<GeoJSON.LineString>[] = [];
-      const arrowFeatures: GeoJSON.Feature<GeoJSON.Point>[] = [];
+      const beadSource = map.getSource("history-beads") as mapboxgl.GeoJSONSource | undefined;
+      
+      // 1. Log First Coordinate for Audit
+      const first = sortedHistory[0];
+      console.log("TRACE START COORD:", [Number(first.lon), Number(first.lat)]);
 
-      for (let i = 0; i < sortedHistory.length - 1; i++) {
-        const a = sortedHistory[i], b = sortedHistory[i+1];
-        
-        // Strict Numeric Casting to prevent NaN errors in Mapbox expressions
-        const latA = Number(a.lat), lonA = Number(a.lon), speedA = Number(a.speed_kmh);
-        const latB = Number(b.lat), lonB = Number(b.lon), speedB = Number(b.speed_kmh);
-        
-        if (isNaN(latA) || isNaN(lonA) || isNaN(latB) || isNaN(lonB)) continue;
+      // 2. Single Continuous LineString (More robust)
+      const coordinates = sortedHistory.map(p => [Number(p.lon), Number(p.lat)]).filter(c => !isNaN(c[0]) && !isNaN(c[1]));
+      trailSource.setData({
+        type: "Feature",
+        properties: { speed_kmh: Number(sortedHistory[0].speed_kmh) || 0 },
+        geometry: { type: "LineString", coordinates } as any
+      });
 
-        features.push({
-          type: "Feature",
-          properties: { speed_kmh: (speedA + speedB) / 2 },
-          geometry: { type: "LineString", coordinates: [[lonA, latA], [lonB, latB]] },
-        });
-
-        if (i % 3 === 0) {
-          const dx = lonB - lonA, dy = latB - latA;
-          const bearing = (Math.atan2(dx, dy) * 180) / Math.PI;
-          arrowFeatures.push({
+      // 3. Neon Beads (Individual Points)
+      if (beadSource) {
+        beadSource.setData({
+          type: "FeatureCollection",
+          features: sortedHistory.map(p => ({
             type: "Feature",
-            properties: { bearing },
-            geometry: { type: "Point", coordinates: [lonA, latA] },
-          });
-        }
+            properties: {},
+            geometry: { type: "Point", coordinates: [Number(p.lon), Number(p.lat)] }
+          })) as any
+        });
       }
-      console.log("GENERATED FEATURES:", features.length, "lines,", arrowFeatures.length, "arrows");
-      trailSource.setData({ type: "FeatureCollection", features });
+
+      // 4. Directional Arrows
+      const arrowFeatures: GeoJSON.Feature<GeoJSON.Point>[] = [];
+      for (let i = 0; i < sortedHistory.length - 1; i += 5) {
+        const a = sortedHistory[i], b = sortedHistory[i+1];
+        const latA = Number(a.lat), lonA = Number(a.lon);
+        const latB = Number(b.lat), lonB = Number(b.lon);
+        if (isNaN(latA) || isNaN(lonA) || isNaN(latB) || isNaN(lonB)) continue;
+        const dx = lonB - lonA, dy = latB - latA;
+        const bearing = (Math.atan2(dx, dy) * 180) / Math.PI;
+        arrowFeatures.push({
+          type: "Feature",
+          properties: { bearing },
+          geometry: { type: "Point", coordinates: [lonA, latA] },
+        });
+      }
       arrowSource.setData({ type: "FeatureCollection", features: arrowFeatures });
       
-      // EXPLICIT TOP-OF-STACK ELEVATION: Force layers to front after update
-      if (map.getLayer("history-trail-line")) map.moveLayer("history-trail-line");
-      if (map.getLayer("history-arrows-layer")) map.moveLayer("history-arrows-layer");
+      // 5. Force Layers to Top
+      ["history-trail-line", "history-trail-beads", "history-arrows-layer"].forEach(id => {
+        if (map.getLayer(id)) map.moveLayer(id);
+      });
+
+      console.log("MAP UPDATED: 1 line,", sortedHistory.length, "beads,", arrowFeatures.length, "arrows");
     } else {
       trailSource.setData({ type: "FeatureCollection", features: [] });
       arrowSource.setData({ type: "FeatureCollection", features: [] });
+      if (map.getSource("history-beads")) (map.getSource("history-beads") as any).setData({ type: "FeatureCollection", features: [] });
     }
   }, [selectedHistory, mapLoaded]);
 
