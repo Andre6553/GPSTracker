@@ -404,43 +404,65 @@ export default function Dashboard() {
     return () => { supabase.removeChannel(channel); };
   }, [authChecked, assignedDevices, selectedDeviceId, startDate, endDate]);
 
-  // Lazy-load history for selected device
+  // Lazy-load history for selected device (paginate: PostgREST often caps ~1000 rows per request)
   useEffect(() => {
     if (!selectedDeviceId) return;
+    let cancelled = false;
+
     async function fetchDeviceHistory() {
       setIsLoadingHistory(true);
-      let query = supabase
-        .from("telemetry")
-        .select("*")
-        .eq("device_id", selectedDeviceId)
-        .order("created_at", { ascending: false })
-        .limit(25000);
+      const pageSize = 1000;
+      const maxRows = 50000;
+      const hasRange = !!(startDate || endDate);
+      const all: TelemetryPoint[] = [];
 
-      if (startDate) query = query.gte("created_at", `${startDate}T00:00:00+02:00`);
-      if (endDate) query = query.lte("created_at", `${endDate}T23:59:59+02:00`);
+      for (let offset = 0; offset < maxRows; offset += pageSize) {
+        if (cancelled) return;
 
-      const { data, error } = await query;
-      if (error) {
-        console.error("fetchDeviceHistory:", error);
+        let q = supabase
+          .from("telemetry")
+          .select("*")
+          .eq("device_id", selectedDeviceId)
+          .order("created_at", { ascending: hasRange })
+          .range(offset, offset + pageSize - 1);
+
+        if (startDate) q = q.gte("created_at", `${startDate}T00:00:00+02:00`);
+        if (endDate) q = q.lte("created_at", `${endDate}T23:59:59+02:00`);
+
+        const { data, error } = await q;
+        if (error) {
+          console.error("fetchDeviceHistory:", error);
+          if (!cancelled) {
+            setSelectedHistory([]);
+            setIsLoadingHistory(false);
+          }
+          return;
+        }
+        if (!data?.length) break;
+        all.push(...(data as TelemetryPoint[]));
+        if (data.length < pageSize) break;
+      }
+
+      if (cancelled) return;
+
+      if (!all.length) {
         setSelectedHistory([]);
         setIsLoadingHistory(false);
         return;
       }
-      if (!data?.length) {
-        setSelectedHistory([]);
-        setIsLoadingHistory(false);
-        return;
-      }
-      console.log(`FETCHED HISTORY: Found ${data.length} records for ${selectedDeviceId}`);
-      console.log("HISTORY SPAN:", data[data.length - 1].created_at, "to", data[0].created_at);
 
-      const sorted = data
+      const sorted = all
         .slice()
         .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      console.log(`FETCHED HISTORY: ${sorted.length} records for ${selectedDeviceId} (${hasRange ? "date range" : "recent"})`);
       setSelectedHistory(sorted);
       setIsLoadingHistory(false);
     }
+
     fetchDeviceHistory();
+    return () => {
+      cancelled = true;
+    };
   }, [selectedDeviceId, startDate, endDate]);
 
   // Load Geofences
