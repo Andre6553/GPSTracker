@@ -379,7 +379,8 @@ export default function Dashboard() {
             return [newData, ...others];
           });
           
-          if (newData.device_id === selectedDeviceId) {
+          // Do not merge live points into a date-filtered history view (would skew trail / order)
+          if (newData.device_id === selectedDeviceId && !startDate && !endDate) {
             setSelectedHistory(prev => {
               const last = prev[prev.length - 1];
               // 1. Skip if it's stationary jitter
@@ -401,7 +402,7 @@ export default function Dashboard() {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [authChecked, assignedDevices, selectedDeviceId]);
+  }, [authChecked, assignedDevices, selectedDeviceId, startDate, endDate]);
 
   // Lazy-load history for selected device
   useEffect(() => {
@@ -418,18 +419,25 @@ export default function Dashboard() {
       if (startDate) query = query.gte("created_at", `${startDate}T00:00:00+02:00`);
       if (endDate) query = query.lte("created_at", `${endDate}T23:59:59+02:00`);
 
-      const { data } = await query;
-       if (data && data.length > 0) {
-        console.log(`FETCHED HISTORY: Found ${data.length} records for ${selectedDeviceId}`);
-        console.log("HISTORY SPAN:", data[data.length - 1].created_at, "to", data[0].created_at);
-        
-        // REVERSE AND SORT ONLY (NO FILTERING FOR HISTORY)
-        const sorted = data.reverse().sort((a, b) => 
-          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-        );
-        console.log("HISTORY RECOVERY: Using raw points for maximum visibility.");
-        setSelectedHistory(sorted);
+      const { data, error } = await query;
+      if (error) {
+        console.error("fetchDeviceHistory:", error);
+        setSelectedHistory([]);
+        setIsLoadingHistory(false);
+        return;
       }
+      if (!data?.length) {
+        setSelectedHistory([]);
+        setIsLoadingHistory(false);
+        return;
+      }
+      console.log(`FETCHED HISTORY: Found ${data.length} records for ${selectedDeviceId}`);
+      console.log("HISTORY SPAN:", data[data.length - 1].created_at, "to", data[0].created_at);
+
+      const sorted = data
+        .slice()
+        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      setSelectedHistory(sorted);
       setIsLoadingHistory(false);
     }
     fetchDeviceHistory();

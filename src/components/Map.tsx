@@ -592,17 +592,56 @@ export default function Map({
     }
   }, [playbackPoint, mapLoaded]);
 
+  // Fit camera to full history trail when present (otherwise live follow pulls view back to "home")
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapLoaded) return;
-    let target: { lng: number; lat: number } | null = null;
-    if (playbackPoint) target = { lng: playbackPoint.lon, lat: playbackPoint.lat };
-    else {
-      const selected = fleetLatest.find((c) => c.device_id === selectedDeviceId);
-      if (selected) target = { lng: selected.lon, lat: selected.lat };
+    if (!map || !mapLoaded || !playbackPoint) return;
+    map.flyTo({ center: [playbackPoint.lon, playbackPoint.lat], speed: 1.2 });
+  }, [playbackPoint?.lat, playbackPoint?.lon, mapLoaded]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded || playbackPoint) return;
+    if (selectedHistory.length < 2) return;
+
+    const sorted = [...selectedHistory].sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+    let minLng = Infinity,
+      maxLng = -Infinity,
+      minLat = Infinity,
+      maxLat = -Infinity;
+    for (const p of sorted) {
+      const lo = Number(p.lon),
+        la = Number(p.lat);
+      if (Number.isNaN(lo) || Number.isNaN(la)) continue;
+      minLng = Math.min(minLng, lo);
+      maxLng = Math.max(maxLng, lo);
+      minLat = Math.min(minLat, la);
+      maxLat = Math.max(maxLat, la);
     }
-    if (target) map.flyTo({ center: [target.lng, target.lat], speed: 1.2 });
-  }, [selectedDeviceId, playbackPoint?.lat, playbackPoint?.lon, mapLoaded, fleetLatest]);
+    if (minLng === Infinity) return;
+    const lonSpan = maxLng - minLng;
+    const latSpan = maxLat - minLat;
+    if (lonSpan < 1e-9 && latSpan < 1e-9) return;
+
+    map.fitBounds(
+      [
+        [minLng, minLat],
+        [maxLng, maxLat],
+      ],
+      { padding: 56, maxZoom: 15, duration: 900 }
+    );
+  }, [selectedHistory, mapLoaded, playbackPoint, selectedDeviceId]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded || playbackPoint) return;
+    if (selectedHistory.length > 1) return;
+
+    const selected = fleetLatest.find((c) => c.device_id === selectedDeviceId);
+    if (selected) map.flyTo({ center: [selected.lon, selected.lat], speed: 1.2 });
+  }, [selectedDeviceId, mapLoaded, fleetLatest, selectedHistory.length, playbackPoint]);
 
   useEffect(() => {
     const map = mapRef.current;
