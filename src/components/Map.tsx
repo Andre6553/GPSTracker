@@ -584,10 +584,15 @@ export default function Map({
     if (!source) return;
 
     if (selectedHistory.length > 1) {
+      // Safeguard: Sort history chronologically before drawing segments
+      const sortedHistory = [...selectedHistory].sort((a, b) => 
+        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+
       const features: GeoJSON.Feature<GeoJSON.LineString>[] = [];
-      for (let i = 0; i < selectedHistory.length - 1; i++) {
-        const a = selectedHistory[i];
-        const b = selectedHistory[i + 1];
+      for (let i = 0; i < sortedHistory.length - 1; i++) {
+        const a = sortedHistory[i];
+        const b = sortedHistory[i + 1];
         const avgSpeed = (a.speed_kmh + b.speed_kmh) / 2;
         features.push({
           type: "Feature",
@@ -623,9 +628,14 @@ export default function Map({
     const STOP_THRESHOLD_MS = 2 * 60 * 1000; // 2 minutes
     const features: GeoJSON.Feature<GeoJSON.Point>[] = [];
 
-    for (let i = 0; i < selectedHistory.length - 1; i++) {
-      const curr = selectedHistory[i];
-      const next = selectedHistory[i + 1];
+    // Safeguard: Sort history chronologically before calculating stops
+    const sortedHistory = [...selectedHistory].sort((a, b) => 
+      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+
+    for (let i = 0; i < sortedHistory.length - 1; i++) {
+      const curr = sortedHistory[i];
+      const next = sortedHistory[i + 1];
       const tCurr = new Date(curr.created_at).getTime();
       const tNext = new Date(next.created_at).getTime();
       const gapMs = tNext - tCurr;

@@ -372,8 +372,18 @@ export default function Dashboard() {
           if (newData.device_id === selectedDeviceId) {
             setSelectedHistory(prev => {
               const last = prev[prev.length - 1];
+              // 1. Skip if it's stationary jitter
               if (isJitter(last || null, newData)) return prev;
-              return [...prev, newData].slice(-1000);
+              
+              // 2. Prevent exact duplicate timestamps (avoiding database double-inserts)
+              if (prev.some(p => p.created_at === newData.created_at)) return prev;
+
+              // 3. Add and Sort chronologically (ensures smooth path even if sync arrives out of order)
+              const combined = [...prev, newData].sort((a, b) => 
+                new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+              );
+              
+              return combined.slice(-1000);
             });
           }
         }
@@ -399,7 +409,13 @@ export default function Dashboard() {
       if (endDate) query = query.lte("created_at", `${endDate}T23:59:59Z`);
 
       const { data } = await query;
-      if (data) setSelectedHistory(cleanGPSPoints(data.reverse()));
+      if (data) {
+        // Reverse because query was descending, then sort explicitly to be safe
+        const sorted = data.reverse().sort((a, b) => 
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+        setSelectedHistory(cleanGPSPoints(sorted));
+      }
       setIsLoadingHistory(false);
     }
     fetchDeviceHistory();
