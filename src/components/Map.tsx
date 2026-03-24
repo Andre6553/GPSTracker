@@ -123,12 +123,12 @@ export default function Map({
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
           "line-color": "#facc15",
-          "line-width": 8,
+          "line-width": 10, // Increased for fail-safe visibility
           "line-opacity": 0.95,
         },
       });
 
-      // Neon Beads (Circles for every GPS point to ensure visibility)
+      // Neon Beads (High-visibility marker for every GPS point)
       map.addSource("history-beads", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
@@ -138,9 +138,9 @@ export default function Map({
         type: "circle",
         source: "history-beads",
         paint: {
-          "circle-radius": 4,
+          "circle-radius": 6, // Larger beads
           "circle-color": "#ffffff",
-          "circle-stroke-width": 1.5,
+          "circle-stroke-width": 2,
           "circle-stroke-color": "#facc15",
         },
       });
@@ -596,12 +596,15 @@ export default function Map({
       const first = sortedHistory[0];
       console.log("TRACE START COORD:", [Number(first.lon), Number(first.lat)]);
 
-      // 2. Single Continuous LineString (More robust)
+      // 2. Single Continuous LineString wrapped in FeatureCollection
       const coordinates = sortedHistory.map(p => [Number(p.lon), Number(p.lat)]).filter(c => !isNaN(c[0]) && !isNaN(c[1]));
       trailSource.setData({
-        type: "Feature",
-        properties: { speed_kmh: Number(sortedHistory[0].speed_kmh) || 0 },
-        geometry: { type: "LineString", coordinates } as any
+        type: "FeatureCollection",
+        features: [{
+          type: "Feature",
+          properties: { speed_kmh: Number(sortedHistory[0].speed_kmh) || 0 },
+          geometry: { type: "LineString", coordinates } as any
+        }]
       });
 
       // 3. Neon Beads (Individual Points)
@@ -610,7 +613,7 @@ export default function Map({
           type: "FeatureCollection",
           features: sortedHistory.map(p => ({
             type: "Feature",
-            properties: {},
+            properties: { id: p.id },
             geometry: { type: "Point", coordinates: [Number(p.lon), Number(p.lat)] }
           })) as any
         });

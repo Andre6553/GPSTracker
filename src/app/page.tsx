@@ -393,7 +393,7 @@ export default function Dashboard() {
                 new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
               );
               
-              return combined.slice(-5000);
+              return combined.slice(-10000);
             });
           }
         }
@@ -413,20 +413,24 @@ export default function Dashboard() {
         .select("*")
         .eq("device_id", selectedDeviceId)
         .order("created_at", { ascending: false })
-        .limit(5000);
+        .limit(10000);
 
       if (startDate) query = query.gte("created_at", `${startDate}T00:00:00+02:00`);
       if (endDate) query = query.lte("created_at", `${endDate}T23:59:59+02:00`);
 
       const { data } = await query;
-      if (data) {
+       if (data && data.length > 0) {
         console.log(`FETCHED HISTORY: Found ${data.length} records for ${selectedDeviceId}`);
-        if (data.length > 0) console.log("HISTORY DATA SAMPLE:", data[0]);
+        console.log("HISTORY DATA SAMPLE:", data[0]);
+        console.log("HISTORY SPAN:", data[data.length - 1].created_at, "to", data[0].created_at);
+        
         // Reverse because query was descending, then sort explicitly to be safe
         const sorted = data.reverse().sort((a, b) => 
           new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
         );
-        setSelectedHistory(cleanGPSPoints(sorted));
+        const cleaned = cleanGPSPoints(sorted);
+        console.log("FILTER EFFICIENCY:", data.length, "raw ->", cleaned.length, "cleaned");
+        setSelectedHistory(cleaned);
       }
       setIsLoadingHistory(false);
     }
