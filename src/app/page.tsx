@@ -1024,6 +1024,41 @@ export default function Dashboard() {
                   <div className="flex flex-col gap-2">
                     <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white" />
                     <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const d = format(new Date(), "yyyy-MM-dd");
+                        setStartDate(d);
+                        setEndDate(d);
+                      }}
+                      className="mt-1 w-full flex items-center justify-center gap-1.5 rounded-lg border border-blue-600/50 bg-blue-600/20 px-2 py-2 text-[11px] font-semibold text-blue-300 hover:bg-blue-600/30 transition-colors"
+                    >
+                      <Calendar className="w-3.5 h-3.5" />
+                      Today (full day)
+                    </button>
+                    <p className="text-[10px] text-slate-500 leading-snug">
+                      Uses your PC&apos;s date for start and end, loads all points for that day in batches (map zooms to full trail).
+                    </p>
+                    {isLoadingHistory ? (
+                      <p className="text-[10px] text-amber-400/90">Loading history…</p>
+                    ) : selectedHistory.length > 0 ? (
+                      <p className="text-[10px] text-slate-400">
+                        <span className="text-emerald-400 font-semibold">{selectedHistory.length.toLocaleString()}</span> GPS points
+                        {selectedHistory.length >= 2 && (
+                          <>
+                            {" "}
+                            · {format(ensureUTC(selectedHistory[0].created_at), "HH:mm")} →{" "}
+                            {format(
+                              ensureUTC(selectedHistory[selectedHistory.length - 1].created_at),
+                              "HH:mm"
+                            )}{" "}
+                            (local display)
+                          </>
+                        )}
+                      </p>
+                    ) : startDate || endDate ? (
+                      <p className="text-[10px] text-slate-500">No points in this range for this device.</p>
+                    ) : null}
                   </div>
                 </div>
 
