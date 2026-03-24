@@ -122,12 +122,9 @@ export default function Map({
         source: "history-trail",
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
-          "line-color": [
-            "step", ["get", "speed_kmh"],
-            "#3b82f6", 10, "#10b981", 60, "#f59e0b", 100, "#ef4444"
-          ],
-          "line-width": 6,
-          "line-opacity": 0.9,
+          "line-color": "#facc15", // Solid Vibrant Yellow for absolute visibility
+          "line-width": 8,
+          "line-opacity": 0.95,
         },
       });
 
@@ -141,11 +138,11 @@ export default function Map({
         type: "circle",
         source: "history-arrows",
         paint: {
-          "circle-radius": 4,
+          "circle-radius": 5,
           "circle-color": "#ffffff",
-          "circle-stroke-width": 1.5,
-          "circle-stroke-color": "#3b82f6",
-          "circle-opacity": 0.8,
+          "circle-stroke-width": 2,
+          "circle-stroke-color": "#facc15",
+          "circle-opacity": 1.0,
         },
       });
 
@@ -298,12 +295,9 @@ export default function Map({
           source: "history-trail",
           layout: { "line-join": "round", "line-cap": "round" },
           paint: {
-            "line-color": [
-              "step", ["get", "speed_kmh"],
-              "#3b82f6", 10, "#10b981", 60, "#f59e0b", 100, "#ef4444"
-            ],
-            "line-width": 6,
-            "line-opacity": 0.9,
+            "line-color": "#facc15",
+            "line-width": 8,
+            "line-opacity": 0.95,
           },
         });
       }
@@ -318,11 +312,11 @@ export default function Map({
           type: "circle",
           source: "history-arrows",
           paint: {
-            "circle-radius": 4,
+            "circle-radius": 5,
             "circle-color": "#ffffff",
-            "circle-stroke-width": 1.5,
-            "circle-stroke-color": "#3b82f6",
-            "circle-opacity": 0.8,
+            "circle-stroke-width": 2,
+            "circle-stroke-color": "#facc15",
+            "circle-opacity": 1.0,
           },
         });
       }
@@ -593,6 +587,10 @@ export default function Map({
       console.log("GENERATED FEATURES:", features.length, "lines,", arrowFeatures.length, "arrows");
       trailSource.setData({ type: "FeatureCollection", features });
       arrowSource.setData({ type: "FeatureCollection", features: arrowFeatures });
+      
+      // EXPLICIT TOP-OF-STACK ELEVATION: Force layers to front after update
+      if (map.getLayer("history-trail-line")) map.moveLayer("history-trail-line");
+      if (map.getLayer("history-arrows-layer")) map.moveLayer("history-arrows-layer");
     } else {
       trailSource.setData({ type: "FeatureCollection", features: [] });
       arrowSource.setData({ type: "FeatureCollection", features: [] });
