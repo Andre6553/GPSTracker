@@ -132,6 +132,64 @@ function screenSegmentBearingDeg(
   return ((deg % 360) + 360) % 360;
 }
 
+function escapeHtml(s: string): string {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** GeoJSON-serializable props for trail beads / arrows (popup on click). */
+function trailPointFeatureProps(
+  p: TelemetryPoint,
+  kind: "bead" | "arrow",
+  extra: Record<string, string | number> = {}
+) {
+  return {
+    kind,
+    id: p.id,
+    device_id: String(p.device_id),
+    lat: Number(p.lat),
+    lon: Number(p.lon),
+    speed_kmh: Number(p.speed_kmh) || 0,
+    altitude_m: Number(p.altitude_m) || 0,
+    satellites: Number(p.satellites) || 0,
+    created_at: p.created_at,
+    ...extra,
+  };
+}
+
+function formatTrailPointPopupHtml(props: GeoJSON.GeoJsonProperties): string {
+  if (!props || typeof props !== "object") return "";
+  const p = props as Record<string, unknown>;
+  const lat = Number(p.lat);
+  const lon = Number(p.lon);
+  const speed = Number(p.speed_kmh);
+  const alt = Number(p.altitude_m);
+  const sats = Number(p.satellites);
+  const device = escapeHtml(String(p.device_id ?? ""));
+  const createdRaw = String(p.created_at ?? "");
+  const timeStr = escapeHtml(
+    createdRaw ? new Date(createdRaw).toLocaleString() : "—"
+  );
+  const kind = p.kind === "arrow" ? "Direction" : "Point";
+  const title = escapeHtml(kind);
+
+  return `<div style="font-family:system-ui,sans-serif;padding:4px;min-width:200px;">
+    <div style="font-weight:700;color:#1e293b;font-size:13px;">Trail · ${title}</div>
+    <div style="color:#64748b;font-size:11px;margin:4px 0 6px;">${timeStr}</div>
+    <div style="color:#475569;font-size:12px;line-height:1.45;">
+      <div><strong>Lat</strong> ${Number.isFinite(lat) ? lat.toFixed(6) : "—"}</div>
+      <div><strong>Lon</strong> ${Number.isFinite(lon) ? lon.toFixed(6) : "—"}</div>
+      <div><strong>Speed</strong> ${Number.isFinite(speed) ? speed.toFixed(1) : "—"} km/h</div>
+      <div><strong>Altitude</strong> ${Number.isFinite(alt) ? alt.toFixed(0) : "—"} m</div>
+      <div><strong>Satellites</strong> ${Number.isFinite(sats) ? String(Math.round(sats)) : "—"}</div>
+      <div style="margin-top:4px;"><strong>Device</strong> ${device}</div>
+    </div>
+  </div>`;
+}
+
 export default function Map({
   fleetLatest,
   selectedDeviceId,
@@ -549,15 +607,69 @@ export default function Map({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
+    if (!map || !mapLoaded) return;
+
+    const trailPopup = new mapboxgl.Popup({
+      closeButton: true,
+      closeOnClick: true,
+      maxWidth: "320px",
+      offset: 12,
+    });
+
+    const trailLayers = ["history-trail-beads", "history-arrows-layer"];
+
     const handleClick = (e: mapboxgl.MapMouseEvent) => {
+      if (!isAddingGeofence) {
+        const available = trailLayers.filter((id) => map.getLayer(id));
+        if (available.length) {
+          const feats = map.queryRenderedFeatures(e.point, { layers: available });
+          if (feats.length > 0) {
+            const f = feats[0];
+            const geom = f.geometry;
+            if (geom && geom.type === "Point") {
+              const coords = geom.coordinates as [number, number];
+              trailPopup
+                .setLngLat(coords)
+                .setHTML(formatTrailPointPopupHtml(f.properties))
+                .addTo(map);
+              return;
+            }
+          }
+        }
+      }
+      trailPopup.remove();
       if (onMapClick) onMapClick(e.lngLat.lat, e.lngLat.lng);
     };
+
+    const onEnter = () => {
+      if (!isAddingGeofence) map.getCanvas().style.cursor = "pointer";
+    };
+    const onLeave = () => {
+      if (!isAddingGeofence) map.getCanvas().style.cursor = "";
+    };
+
     map.on("click", handleClick);
+    for (const id of trailLayers) {
+      if (map.getLayer(id)) {
+        map.on("mouseenter", id, onEnter);
+        map.on("mouseleave", id, onLeave);
+      }
+    }
+
     if (isAddingGeofence) map.getCanvas().style.cursor = "crosshair";
     else map.getCanvas().style.cursor = "";
-    return () => { map.off("click", handleClick); };
-  }, [onMapClick, isAddingGeofence]);
+
+    return () => {
+      map.off("click", handleClick);
+      for (const id of trailLayers) {
+        if (map.getLayer(id)) {
+          map.off("mouseenter", id, onEnter);
+          map.off("mouseleave", id, onLeave);
+        }
+      }
+      trailPopup.remove();
+    };
+  }, [onMapClick, isAddingGeofence, mapLoaded]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -766,13 +878,13 @@ export default function Map({
           }
           arrowFeatures.push({
             type: "Feature",
-            properties: { bearing },
+            properties: trailPointFeatureProps(p, "arrow", { bearing }),
             geometry: { type: "Point", coordinates: [lon, lat] },
           });
         } else {
           beadFeatures.push({
             type: "Feature",
-            properties: { id: p.id },
+            properties: trailPointFeatureProps(p, "bead"),
             geometry: { type: "Point", coordinates: [lon, lat] },
           });
         }
