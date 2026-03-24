@@ -62,17 +62,6 @@ const HISTORY_TRAIL_LINE_PAINT: mapboxgl.LinePaint = {
 };
 
 // Generate circle polygon coordinates for geofences
-function calculateBearing(lat1: number, lon1: number, lat2: number, lon2: number) {
-  const φ1 = (lat1 * Math.PI) / 180;
-  const φ2 = (lat2 * Math.PI) / 180;
-  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
-  const y = Math.sin(Δλ) * Math.cos(φ2);
-  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
-  const θ = Math.atan2(y, x);
-  return ((θ * 180) / Math.PI + 360) % 360;
-}
-
-// Generate circle polygon coordinates for geofences
 function createGeoJSONCircle(center: [number, number], radiusKm: number, points = 64): GeoJSON.Feature<GeoJSON.Polygon> {
   const coords: [number, number][] = [];
   const distanceX = radiusKm / (111.32 * Math.cos((center[1] * Math.PI) / 180));
@@ -124,6 +113,25 @@ function ensureTrailArrowImage(map: mapboxgl.Map) {
   map.addImage(TRAIL_ARROW_IMAGE_ID, createTrailArrowImageData(), { pixelRatio: 2 });
 }
 
+/**
+ * Clockwise degrees from north for the segment as drawn on screen (Mercator projection).
+ * Matches Mapbox line rendering so arrows stay parallel to the trail polyline.
+ */
+function screenSegmentBearingDeg(
+  map: mapboxgl.Map,
+  lon1: number,
+  lat1: number,
+  lon2: number,
+  lat2: number
+): number {
+  const p1 = map.project([lon1, lat1]);
+  const p2 = map.project([lon2, lat2]);
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const deg = (Math.atan2(dx, -dy) * 180) / Math.PI;
+  return ((deg % 360) + 360) % 360;
+}
+
 export default function Map({
   fleetLatest,
   selectedDeviceId,
@@ -143,8 +151,11 @@ export default function Map({
   const markersRef = useRef<globalThis.Map<string, mapboxgl.Marker>>(new globalThis.Map());
   const playbackMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const skipInitialThemeStyleRef = useRef(true);
+  const selectedHistoryRef = useRef<TelemetryPoint[]>([]);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [showTraffic, setShowTraffic] = useState(false);
+
+  selectedHistoryRef.current = selectedHistory;
 
   const defaultCenter: [number, number] = [22.0, -34.0]; // [lng, lat]
 
@@ -197,7 +208,7 @@ export default function Map({
         },
       });
 
-      // Direction of travel (arrow symbols, rotated by geographic bearing)
+      // Direction of travel (arrow symbols; bearing = screen-parallel segment angle)
       map.addSource("history-arrows", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
@@ -211,7 +222,7 @@ export default function Map({
           "icon-image": TRAIL_ARROW_IMAGE_ID,
           "icon-size": 0.42,
           "icon-rotate": ["get", "bearing"],
-          "icon-rotation-alignment": "map",
+          "icon-rotation-alignment": "viewport",
           "icon-allow-overlap": true,
           "icon-ignore-placement": true,
         },
@@ -412,7 +423,7 @@ export default function Map({
             "icon-image": TRAIL_ARROW_IMAGE_ID,
             "icon-size": 0.42,
             "icon-rotate": ["get", "bearing"],
-            "icon-rotation-alignment": "map",
+            "icon-rotation-alignment": "viewport",
             "icon-allow-overlap": true,
             "icon-ignore-placement": true,
           },
@@ -692,28 +703,41 @@ export default function Map({
     const arrowSource = map.getSource("history-arrows") as mapboxgl.GeoJSONSource | undefined;
     if (!trailSource || !arrowSource) return;
 
-    if (selectedHistory.length > 1) {
-      const sortedHistory = [...selectedHistory].sort((a,b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-      
-      const beadSource = map.getSource("history-beads") as mapboxgl.GeoJSONSource | undefined;
-      
-      // 2. Multi-colored segments (Colored by speed)
+    const beadSource = map.getSource("history-beads") as mapboxgl.GeoJSONSource | undefined;
+
+    const applyHistoryTrail = () => {
+      if (!map.isStyleLoaded()) return;
+      const hist = selectedHistoryRef.current;
+
+      if (hist.length < 2) {
+        trailSource.setData({ type: "FeatureCollection", features: [] });
+        arrowSource.setData({ type: "FeatureCollection", features: [] });
+        if (beadSource) beadSource.setData({ type: "FeatureCollection", features: [] });
+        return;
+      }
+
+      const sortedHistory = [...hist].sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+
       const lineFeatures: GeoJSON.Feature<GeoJSON.LineString>[] = [];
       for (let i = 0; i < sortedHistory.length - 1; i++) {
-        const start = sortedHistory[i], end = sortedHistory[i+1];
-        const lonA = Number(start.lon), latA = Number(start.lat);
-        const lonB = Number(end.lon), latB = Number(end.lat);
+        const start = sortedHistory[i],
+          end = sortedHistory[i + 1];
+        const lonA = Number(start.lon),
+          latA = Number(start.lat);
+        const lonB = Number(end.lon),
+          latB = Number(end.lat);
         if (isNaN(lonA) || isNaN(latA) || isNaN(lonB) || isNaN(latB)) continue;
 
         lineFeatures.push({
           type: "Feature",
           properties: { speed_kmh: Number(end.speed_kmh) || 0 },
-          geometry: { type: "LineString", coordinates: [[lonA, latA], [lonB, latB]] }
+          geometry: { type: "LineString", coordinates: [[lonA, latA], [lonB, latB]] },
         });
       }
       trailSource.setData({ type: "FeatureCollection", features: lineFeatures });
 
-      // 3–4. White bead on most points; every 3rd point (1-based: 3,6,9…) is a direction arrow instead
       const beadFeatures: GeoJSON.Feature<GeoJSON.Point>[] = [];
       const arrowFeatures: GeoJSON.Feature<GeoJSON.Point>[] = [];
       const n = sortedHistory.length;
@@ -730,14 +754,14 @@ export default function Map({
             const latN = Number(nx.lat),
               lonN = Number(nx.lon);
             if (!isNaN(latN) && !isNaN(lonN)) {
-              bearing = calculateBearing(lat, lon, latN, lonN);
+              bearing = screenSegmentBearingDeg(map, lon, lat, lonN, latN);
             }
           } else if (i > 0) {
             const pv = sortedHistory[i - 1];
             const latP = Number(pv.lat),
               lonP = Number(pv.lon);
             if (!isNaN(latP) && !isNaN(lonP)) {
-              bearing = calculateBearing(latP, lonP, lat, lon);
+              bearing = screenSegmentBearingDeg(map, lonP, latP, lon, lat);
             }
           }
           arrowFeatures.push({
@@ -758,17 +782,26 @@ export default function Map({
         beadSource.setData({ type: "FeatureCollection", features: beadFeatures } as any);
       }
       arrowSource.setData({ type: "FeatureCollection", features: arrowFeatures });
-      
-      // 5. Force ALL Critical Layers to Top
-      ["geofences-fill", "geofences-border", "history-trail-line", "history-trail-beads", "history-arrows-layer", "stop-circles"].forEach(id => {
+
+      ["geofences-fill", "geofences-border", "history-trail-line", "history-trail-beads", "history-arrows-layer", "stop-circles"].forEach((id) => {
         if (map.getLayer(id)) map.moveLayer(id);
       });
+    };
 
-    } else {
-      trailSource.setData({ type: "FeatureCollection", features: [] });
-      arrowSource.setData({ type: "FeatureCollection", features: [] });
-      if (map.getSource("history-beads")) (map.getSource("history-beads") as any).setData({ type: "FeatureCollection", features: [] });
-    }
+    applyHistoryTrail();
+
+    const onCamera = () => applyHistoryTrail();
+    map.on("moveend", onCamera);
+    map.on("zoomend", onCamera);
+    map.on("rotateend", onCamera);
+    map.on("pitchend", onCamera);
+
+    return () => {
+      map.off("moveend", onCamera);
+      map.off("zoomend", onCamera);
+      map.off("rotateend", onCamera);
+      map.off("pitchend", onCamera);
+    };
   }, [selectedHistory, mapLoaded]);
 
   useEffect(() => {
