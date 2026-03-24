@@ -95,13 +95,15 @@ function createGeoJSONCircle(center: [number, number], radiusKm: number, points 
 const TRAIL_ARROW_IMAGE_ID = "trail-arrow";
 
 /** Points north (up) in canvas space; rotated by `bearing` in symbol layer. */
-function createTrailArrowCanvas(): HTMLCanvasElement {
+function createTrailArrowImageData(): ImageData {
   const s = 64;
   const c = document.createElement("canvas");
   c.width = s;
   c.height = s;
   const ctx = c.getContext("2d");
-  if (!ctx) return c;
+  if (!ctx) {
+    throw new Error("2D canvas not available for trail arrow");
+  }
   ctx.clearRect(0, 0, s, s);
   ctx.fillStyle = "#f8fafc";
   ctx.strokeStyle = "#0f172a";
@@ -114,12 +116,12 @@ function createTrailArrowCanvas(): HTMLCanvasElement {
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
-  return c;
+  return ctx.getImageData(0, 0, s, s);
 }
 
 function ensureTrailArrowImage(map: mapboxgl.Map) {
   if (map.hasImage(TRAIL_ARROW_IMAGE_ID)) return;
-  map.addImage(TRAIL_ARROW_IMAGE_ID, createTrailArrowCanvas(), { pixelRatio: 2 });
+  map.addImage(TRAIL_ARROW_IMAGE_ID, createTrailArrowImageData(), { pixelRatio: 2 });
 }
 
 export default function Map({
