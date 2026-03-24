@@ -6,6 +6,7 @@ import "mapbox-gl/dist/mapbox-gl.css";
 import { Crosshair, MapPin, Activity } from "lucide-react";
 
 export interface TelemetryPoint {
+  id: number;
   device_id: string;
   lat: number;
   lon: number;
