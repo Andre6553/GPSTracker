@@ -713,42 +713,49 @@ export default function Map({
       }
       trailSource.setData({ type: "FeatureCollection", features: lineFeatures });
 
-      // 3. Neon Beads (Individual Points)
-      if (beadSource) {
-        beadSource.setData({
-          type: "FeatureCollection",
-          features: sortedHistory.map(p => ({
+      // 3–4. White bead on most points; every 3rd point (1-based: 3,6,9…) is a direction arrow instead
+      const beadFeatures: GeoJSON.Feature<GeoJSON.Point>[] = [];
+      const arrowFeatures: GeoJSON.Feature<GeoJSON.Point>[] = [];
+      const n = sortedHistory.length;
+      for (let i = 0; i < n; i++) {
+        const p = sortedHistory[i];
+        const lon = Number(p.lon),
+          lat = Number(p.lat);
+        if (isNaN(lon) || isNaN(lat)) continue;
+
+        if (i % 3 === 2) {
+          let bearing = 0;
+          if (i < n - 1) {
+            const nx = sortedHistory[i + 1];
+            const latN = Number(nx.lat),
+              lonN = Number(nx.lon);
+            if (!isNaN(latN) && !isNaN(lonN)) {
+              bearing = calculateBearing(lat, lon, latN, lonN);
+            }
+          } else if (i > 0) {
+            const pv = sortedHistory[i - 1];
+            const latP = Number(pv.lat),
+              lonP = Number(pv.lon);
+            if (!isNaN(latP) && !isNaN(lonP)) {
+              bearing = calculateBearing(latP, lonP, lat, lon);
+            }
+          }
+          arrowFeatures.push({
+            type: "Feature",
+            properties: { bearing },
+            geometry: { type: "Point", coordinates: [lon, lat] },
+          });
+        } else {
+          beadFeatures.push({
             type: "Feature",
             properties: { id: p.id },
-            geometry: { type: "Point", coordinates: [Number(p.lon), Number(p.lat)] }
-          })) as any
-        });
+            geometry: { type: "Point", coordinates: [lon, lat] },
+          });
+        }
       }
 
-      // 4. Direction arrows along trail (subsample so dense GPS doesn’t stack thousands of icons)
-      const arrowFeatures: GeoJSON.Feature<GeoJSON.Point>[] = [];
-      const segments = sortedHistory.length - 1;
-      const maxArrows = 120;
-      const arrowStep = Math.max(1, Math.ceil(segments / maxArrows));
-      for (let i = 0; i < segments; i += arrowStep) {
-        const a = sortedHistory[i],
-          b = sortedHistory[i + 1];
-        const latA = Number(a.lat),
-          lonA = Number(a.lon);
-        const latB = Number(b.lat),
-          lonB = Number(b.lon);
-        if (isNaN(latA) || isNaN(lonA) || isNaN(latB) || isNaN(lonB)) continue;
-        const distKm =
-          Math.hypot(latB - latA, lonB - lonA) * 111;
-        if (distKm < 0.002) continue;
-        const bearing = calculateBearing(latA, lonA, latB, lonB);
-        const midLon = (lonA + lonB) / 2;
-        const midLat = (latA + latB) / 2;
-        arrowFeatures.push({
-          type: "Feature",
-          properties: { bearing },
-          geometry: { type: "Point", coordinates: [midLon, midLat] },
-        });
+      if (beadSource) {
+        beadSource.setData({ type: "FeatureCollection", features: beadFeatures } as any);
       }
       arrowSource.setData({ type: "FeatureCollection", features: arrowFeatures });
       
