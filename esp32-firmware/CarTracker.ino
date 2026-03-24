@@ -42,6 +42,7 @@ unsigned long lastDisplayUpdate = 0;
 unsigned long lastSyncCheck = 0;
 const unsigned long PUBLISH_INTERVAL = 10000;
 const unsigned long SYNC_INTERVAL = 15000;
+size_t lastSyncOffset = 0; 
 
 void MQTT_connect();
 void processOfflineSync();
@@ -129,9 +130,9 @@ void loop() {
     yield(); 
   }
 
-  // Periodic Telemetry
+  // Periodic Telemetry (Only push if location is fresh/updated)
   if (millis() - lastCloudPublish > PUBLISH_INTERVAL) {
-    if (gps.location.isValid()) {
+    if (gps.location.isValid() && gps.location.isUpdated()) {
       if (mqtt.connected()) {
         String csv = String(gps.location.lat(), 6) + "," + String(gps.location.lng(), 6) + "," + String(gps.speed.kmph()) + "," + String(gps.altitude.meters());
         carTracker.publish(csv.c_str());
@@ -139,15 +140,15 @@ void loop() {
       }
       pushToSupabase(gps.location.lat(), gps.location.lng(), gps.speed.kmph(), gps.altitude.meters(), gps.satellites.value());
       
-      // Save local backup
-      File f = LittleFS.open("/history.csv", FILE_APPEND);
-      if (f) {
-        char ts[32] = "NO_TS";
-        if (gps.date.isValid() && gps.time.isValid()) {
+      // Only save local backup if we have a valid time fix (prevents dashboard jumps)
+      if (gps.time.isValid()) {
+        File f = LittleFS.open("/history.csv", FILE_APPEND);
+        if (f) {
+          char ts[32];
           snprintf(ts, 32, "%04d-%02d-%02dT%02d:%02d:%02dZ", gps.date.year(), gps.date.month(), gps.date.day(), gps.time.hour(), gps.time.minute(), gps.time.second());
+          f.printf("%s,%.6f,%.6f,%.1f,%.1f,%d\n", ts, gps.location.lat(), gps.location.lng(), gps.speed.kmph(), gps.altitude.meters(), (int)gps.satellites.value());
+          f.close();
         }
-        f.printf("%s,%.6f,%.6f,%.1f,%.1f,%d\n", ts, gps.location.lat(), gps.location.lng(), gps.speed.kmph(), gps.altitude.meters(), (int)gps.satellites.value());
-        f.close();
       }
     }
     lastCloudPublish = millis();
@@ -175,14 +176,36 @@ void loop() {
 }
 
 void processOfflineSync() {
-  if (!LittleFS.exists("/history.csv")) return;
-  File f = LittleFS.open("/history.csv", FILE_READ);
+  const char* syncFile = "/sync.csv";
+  const char* historyFile = "/history.csv";
+
+  // 1. Prepare sync snapshot if needed
+  if (!LittleFS.exists(syncFile)) {
+    if (!LittleFS.exists(historyFile)) return;
+    
+    // Rename history to sync to allow new data to accumulate in a fresh history.csv
+    if (LittleFS.rename(historyFile, syncFile)) {
+      Serial.println("[SYNC] Snapshotted history.csv -> sync.csv");
+      lastSyncOffset = 0;
+    } else {
+      Serial.println("[SYNC] Rename failed!");
+      return;
+    }
+  }
+
+  // 2. Open sync file
+  File f = LittleFS.open(syncFile, FILE_READ);
   if (!f) return;
 
-  Serial.println("[SYNC] Starting batch backfill...");
+  // 3. Seek to last known offset
+  if (lastSyncOffset > f.size()) lastSyncOffset = 0;
+  f.seek(lastSyncOffset);
+
+  Serial.printf("[SYNC] Processing batch from offset %u...\n", lastSyncOffset);
   int count = 0;
-  while (f.available() && count < 5) { // Process ONLY 5 at a time to prevent watchdog trigger
+  while (f.available() && count < 5) {
     String line = f.readStringUntil('\n');
+    lastSyncOffset = f.position(); // Keep track of progress
     line.trim();
     if (line.length() < 10) continue;
 
@@ -192,9 +215,18 @@ void processOfflineSync() {
 
     if (first > 0 && second > 0) {
       String ts = line.substring(0, first);
+      
+      // CRITICAL: Skip any points that don't have a valid GPS timestamp
+      // These cause "location jumps" on the dashboard because Supabase assigns them the current time.
+      if (ts == "NO_TS") {
+        Serial.println("[SYNC] Skipping line with NO_TS");
+        count++; // Still count towards batch limit to give WiFi a break
+        continue;
+      }
+
       String lt = line.substring(first+1, second);
       String ln = line.substring(second+1, (third > 0 ? third : line.length()));
-      // New parser handle 6 columns: ts, lat, lon, spd, alt, sats
+      
       int fourth = line.indexOf(',', third+1);
       int fifth = line.indexOf(',', fourth+1);
       
@@ -202,9 +234,8 @@ void processOfflineSync() {
       String al = (fourth > 0 ? line.substring(fourth+1, (fifth > 0 ? fifth : line.length())) : "0");
       String sa = (fifth > 0 ? line.substring(fifth+1) : "0");
 
-      pushToSupabase(lt.toDouble(), ln.toDouble(), sp.toDouble(), al.toDouble(), sa.toInt(), (ts == "NO_TS" ? nullptr : ts.c_str()));
+      pushToSupabase(lt.toDouble(), ln.toDouble(), sp.toDouble(), al.toDouble(), sa.toInt(), ts.c_str());
       count++;
-      delay(10); // Small breath for WiFi task
       yield();   
     }
   }
@@ -212,9 +243,11 @@ void processOfflineSync() {
   bool finished = !f.available();
   f.close();
 
+  // 4. Cleanup if finished
   if (finished) {
-    LittleFS.remove("/history.csv");
-    Serial.println("[SYNC] Backfill Finished.");
+    LittleFS.remove(syncFile);
+    lastSyncOffset = 0;
+    Serial.println("[SYNC] Finished and deleted sync.csv.");
   }
 }
 
