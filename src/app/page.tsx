@@ -72,11 +72,11 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
 const isJitter = (prev: TelemetryPoint | null, curr: TelemetryPoint) => {
   if (!prev) return false;
   const distM = haversineKm(prev.lat, prev.lon, curr.lat, curr.lon) * 1000;
-  // Professional-grade stationary lock: 10m or 5km/h required to move
-  return distM < 10 && curr.speed_kmh < 5;
+  // Professional-grade stationary lock: 5m or 5km/h required to move
+  return distM < 5 && curr.speed_kmh < 5;
 };
 
-// Filter out stationary jitter (GPS drift when parket)
+// Filter out stationary jitter (GPS drift when parked)
 function cleanGPSPoints(points: TelemetryPoint[]): TelemetryPoint[] {
   if (points.length < 2) return points;
   const result: TelemetryPoint[] = [points[0]];
@@ -86,6 +86,14 @@ function cleanGPSPoints(points: TelemetryPoint[]): TelemetryPoint[] {
     if (isJitter(prev, curr)) continue;
     result.push(curr);
   }
+  
+  // SHORT TRIP SAFEGUARD: If we filtered out almost everything (making the line invisible)
+  // but there was original data, return a subset of the raw data to ensure visibility.
+  if (result.length < 3 && points.length > 5) {
+    console.log("Jitter filter was too aggressive for this short trip. Using raw points.");
+    return points.filter((_, i) => i % 2 === 0);
+  }
+  
   return result;
 }
 
@@ -385,7 +393,7 @@ export default function Dashboard() {
                 new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
               );
               
-              return combined.slice(-1000);
+              return combined.slice(-5000);
             });
           }
         }
@@ -405,13 +413,14 @@ export default function Dashboard() {
         .select("*")
         .eq("device_id", selectedDeviceId)
         .order("created_at", { ascending: false })
-        .limit(1000);
+        .limit(5000);
 
-      if (startDate) query = query.gte("created_at", `${startDate}T00:00:00Z`);
-      if (endDate) query = query.lte("created_at", `${endDate}T23:59:59Z`);
+      if (startDate) query = query.gte("created_at", `${startDate}T00:00:00+02:00`);
+      if (endDate) query = query.lte("created_at", `${endDate}T23:59:59+02:00`);
 
       const { data } = await query;
       if (data) {
+        console.log(`FETCHED HISTORY: Found ${data.length} records for ${selectedDeviceId}`);
         // Reverse because query was descending, then sort explicitly to be safe
         const sorted = data.reverse().sort((a, b) => 
           new Date(a.created_at).getTime() - new Date(b.created_at).getTime()

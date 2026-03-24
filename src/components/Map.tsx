@@ -39,6 +39,17 @@ export interface MapProps {
 }
 
 // Generate circle polygon coordinates for geofences
+function calculateBearing(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const φ1 = (lat1 * Math.PI) / 180;
+  const φ2 = (lat2 * Math.PI) / 180;
+  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  const θ = Math.atan2(y, x);
+  return ((θ * 180) / Math.PI + 360) % 360;
+}
+
+// Generate circle polygon coordinates for geofences
 function createGeoJSONCircle(center: [number, number], radiusKm: number, points = 64): GeoJSON.Feature<GeoJSON.Polygon> {
   const coords: [number, number][] = [];
   const distanceX = radiusKm / (111.32 * Math.cos((center[1] * Math.PI) / 180));
@@ -53,8 +64,7 @@ function createGeoJSONCircle(center: [number, number], radiusKm: number, points 
   coords.push(coords[0]); // close the ring
 
   return {
-    type: "Feature",
-    properties: {},
+    type: "Feature", properties: {},
     geometry: { type: "Polygon", coordinates: [coords] },
   };
 }
@@ -114,32 +124,29 @@ export default function Map({
         paint: {
           "line-color": [
             "step", ["get", "speed_kmh"],
-            "#3b82f6", 60, "#10b981", 100, "#f59e0b", 130, "#ef4444"
+            "#3b82f6", 10, "#10b981", 60, "#f59e0b", 100, "#ef4444"
           ],
-          "line-width": 3,
-          "line-opacity": 0.7,
+          "line-width": 6,
+          "line-opacity": 0.9,
         },
       });
 
-      // Directional arrows along the trail
+      // Directional markers (circles to avoid triangle-11 icon error)
       map.addSource("history-arrows", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
       });
       map.addLayer({
         id: "history-arrows-layer",
-        type: "symbol",
+        type: "circle",
         source: "history-arrows",
-        layout: {
-          "icon-image": "triangle-11",
-          "icon-rotate": ["get", "bearing"],
-          "icon-rotation-alignment": "map",
-          "icon-allow-overlap": false,
-          "icon-ignore-placement": false,
-          "symbol-placement": "point",
-          "icon-size": 1.2,
+        paint: {
+          "circle-radius": 4,
+          "circle-color": "#ffffff",
+          "circle-stroke-width": 1.5,
+          "circle-stroke-color": "#3b82f6",
+          "circle-opacity": 0.8,
         },
-        paint: { "icon-color": "#ffffff", "icon-opacity": 0.9 },
       });
 
       // Mapbox real-time traffic layer
@@ -293,10 +300,10 @@ export default function Map({
           paint: {
             "line-color": [
               "step", ["get", "speed_kmh"],
-              "#3b82f6", 60, "#10b981", 100, "#f59e0b", 130, "#ef4444"
+              "#3b82f6", 10, "#10b981", 60, "#f59e0b", 100, "#ef4444"
             ],
-            "line-width": 3,
-            "line-opacity": 0.7,
+            "line-width": 6,
+            "line-opacity": 0.9,
           },
         });
       }
@@ -308,15 +315,15 @@ export default function Map({
         });
         map.addLayer({
           id: "history-arrows-layer",
-          type: "symbol",
+          type: "circle",
           source: "history-arrows",
-          layout: {
-            "icon-image": "triangle-11",
-            "icon-rotate": ["get", "bearing"],
-            "icon-rotation-alignment": "map",
-            "icon-size": 1.2,
+          paint: {
+            "circle-radius": 4,
+            "circle-color": "#ffffff",
+            "circle-stroke-width": 1.5,
+            "circle-stroke-color": "#3b82f6",
+            "circle-opacity": 0.8,
           },
-          paint: { "icon-color": "#ffffff", "icon-opacity": 0.9 },
         });
       }
 
