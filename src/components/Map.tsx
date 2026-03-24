@@ -5,8 +5,6 @@ import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { Crosshair, MapPin, Activity } from "lucide-react";
 
-
-
 interface TelemetryPoint {
   device_id: string;
   lat: number;
@@ -114,20 +112,37 @@ export default function Map({
         source: "history-trail",
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
-          // Speed color bands: 0-60 blue, 60-100 green, 100-130 orange, 130+ red
           "line-color": [
             "step", ["get", "speed_kmh"],
-            "#3b82f6",  // default: blue (0-60)
-            60,  "#10b981",  // green  (60-100)
-            100, "#f59e0b",  // orange (100-130)
-            130, "#ef4444"   // red    (130+)
+            "#3b82f6", 60, "#10b981", 100, "#f59e0b", 130, "#ef4444"
           ],
-          "line-width": 4,
-          "line-opacity": 0.85,
+          "line-width": 3,
+          "line-opacity": 0.7,
         },
       });
 
-      // Mapbox real-time traffic layer (toggled by showTraffic state)
+      // Directional arrows along the trail
+      map.addSource("history-arrows", {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
+      map.addLayer({
+        id: "history-arrows-layer",
+        type: "symbol",
+        source: "history-arrows",
+        layout: {
+          "icon-image": "triangle-11",
+          "icon-rotate": ["get", "bearing"],
+          "icon-rotation-alignment": "map",
+          "icon-allow-overlap": false,
+          "icon-ignore-placement": false,
+          "symbol-placement": "point",
+          "icon-size": 1.2,
+        },
+        paint: { "icon-color": "#ffffff", "icon-opacity": 0.9 },
+      });
+
+      // Mapbox real-time traffic layer
       map.addSource("mapbox-traffic", {
         type: "vector",
         url: "mapbox://mapbox.mapbox-traffic-v1",
@@ -142,16 +157,12 @@ export default function Map({
           "line-width": 3,
           "line-color": [
             "match", ["get", "congestion"],
-            "low",    "#10b981",
-            "moderate", "#f59e0b",
-            "heavy",  "#ef4444",
-            "severe", "#991b1b",
-            "#94a3b8"
+            "low", "#10b981", "moderate", "#f59e0b", "heavy", "#ef4444", "severe", "#991b1b", "#94a3b8"
           ],
         },
       });
 
-      // Route lines (up to 3 alternatives + selected)
+      // Route lines
       for (let i = 0; i < 3; i++) {
         map.addSource(`route-alt-${i}`, {
           type: "geojson",
@@ -178,12 +189,7 @@ export default function Map({
         id: "route-selected-line",
         type: "line",
         source: "route-selected",
-        paint: {
-          "line-color": "#10b981",
-          "line-width": 5,
-          "line-opacity": 0.9,
-          "line-dasharray": [2, 2],
-        },
+        paint: { "line-color": "#10b981", "line-width": 5, "line-opacity": 0.9, "line-dasharray": [2, 2] },
       });
 
       // Geofences
@@ -195,24 +201,16 @@ export default function Map({
         id: "geofences-fill",
         type: "fill",
         source: "geofences",
-        paint: {
-          "fill-color": "#ef4444",
-          "fill-opacity": 0.25,
-        },
+        paint: { "fill-color": "#ef4444", "fill-opacity": 0.25 },
       });
       map.addLayer({
         id: "geofences-border",
         type: "line",
         source: "geofences",
-        paint: {
-          "line-color": "#dc2626",
-          "line-width": 3,
-          "line-dasharray": [2, 2],
-        },
+        paint: { "line-color": "#dc2626", "line-width": 3, "line-dasharray": [2, 2] },
       });
 
-
-      // Stop markers - orange circles where unit paused > 2 min
+      // Stop markers
       map.addSource("stop-points", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
@@ -246,7 +244,6 @@ export default function Map({
         },
       });
 
-      // Hover popup for stop circles
       const stopPopup = new mapboxgl.Popup({ closeButton: false, closeOnClick: false });
       map.on("mouseenter", "stop-circles", (e) => {
         map.getCanvas().style.cursor = "pointer";
@@ -256,7 +253,7 @@ export default function Map({
         stopPopup
           .setLngLat(coords)
           .setHTML(`<div style="font-family:system-ui;padding:4px 8px;">
-            <div style="font-weight:700;color:#f59e0b;font-size:13px;">P Parked</div>
+            <div style="font-weight:700;color:#f59e0b;font-size:13px;">Parked</div>
             <div style="color:#475569;font-size:12px;">${feat.properties?.duration_text ?? ""}</div>
           </div>`)
           .addTo(map);
@@ -275,18 +272,14 @@ export default function Map({
       mapRef.current = null;
       setMapLoaded(false);
     };
-  }, []); // mount once
+  }, []);
 
-  // Switch map style on dark/light mode toggle
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-
     const newStyle = isDarkMode ? "mapbox://styles/mapbox/dark-v11" : "mapbox://styles/mapbox/streets-v12";
 
-    // Save a flag to re-add sources after style change
     map.once("style.load", () => {
-      // Re-add all sources and layers after style switch
       if (!map.getSource("history-trail")) {
         map.addSource("history-trail", {
           type: "geojson",
@@ -302,13 +295,31 @@ export default function Map({
               "step", ["get", "speed_kmh"],
               "#3b82f6", 60, "#10b981", 100, "#f59e0b", 130, "#ef4444"
             ],
-            "line-width": 4,
-            "line-opacity": 0.85,
+            "line-width": 3,
+            "line-opacity": 0.7,
           },
         });
       }
 
-      // Re-add traffic layer if not present
+      if (!map.getSource("history-arrows")) {
+        map.addSource("history-arrows", {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
+        map.addLayer({
+          id: "history-arrows-layer",
+          type: "symbol",
+          source: "history-arrows",
+          layout: {
+            "icon-image": "triangle-11",
+            "icon-rotate": ["get", "bearing"],
+            "icon-rotation-alignment": "map",
+            "icon-size": 1.2,
+          },
+          paint: { "icon-color": "#ffffff", "icon-opacity": 0.9 },
+        });
+      }
+
       if (!map.getSource("mapbox-traffic")) {
         map.addSource("mapbox-traffic", {
           type: "vector",
@@ -324,11 +335,7 @@ export default function Map({
             "line-width": 3,
             "line-color": [
               "match", ["get", "congestion"],
-              "low", "#10b981",
-              "moderate", "#f59e0b",
-              "heavy", "#ef4444",
-              "severe", "#991b1b",
-              "#94a3b8"
+              "low", "#10b981", "moderate", "#f59e0b", "heavy", "#ef4444", "severe", "#991b1b", "#94a3b8"
             ],
           },
         });
@@ -420,7 +427,6 @@ export default function Map({
           },
         });
       }
-
       setMapLoaded(true);
     });
 
@@ -428,39 +434,23 @@ export default function Map({
     map.setStyle(newStyle);
   }, [isDarkMode]);
 
-  // Handle map click for geofence placement
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-
     const handleClick = (e: mapboxgl.MapMouseEvent) => {
-      if (onMapClick) {
-        onMapClick(e.lngLat.lat, e.lngLat.lng);
-      }
+      if (onMapClick) onMapClick(e.lngLat.lat, e.lngLat.lng);
     };
-
     map.on("click", handleClick);
-
-    // Change cursor when in geofence-adding mode
-    if (isAddingGeofence) {
-      map.getCanvas().style.cursor = "crosshair";
-    } else {
-      map.getCanvas().style.cursor = "";
-    }
-
-    return () => {
-      map.off("click", handleClick);
-    };
+    if (isAddingGeofence) map.getCanvas().style.cursor = "crosshair";
+    else map.getCanvas().style.cursor = "";
+    return () => map.off("click", handleClick);
   }, [onMapClick, isAddingGeofence]);
 
-  // Update fleet markers
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
 
     const currentIds = new Set(fleetLatest.map((c) => c.device_id));
-
-    // Remove markers for devices no longer in the fleet
     markersRef.current.forEach((marker, id) => {
       if (!currentIds.has(id)) {
         marker.remove();
@@ -468,28 +458,22 @@ export default function Map({
       }
     });
 
-    // Add or update markers
     fleetLatest.forEach((car) => {
       const isSelected = car.device_id === selectedDeviceId;
       const color = isSelected ? "#ef4444" : "#3b82f6";
       const existing = markersRef.current.get(car.device_id);
 
       if (existing) {
-        // Update position
         existing.setLngLat([car.lon, car.lat]);
-        // Update color by replacing the marker element's style
         const el = existing.getElement();
         const svg = el.querySelector("svg");
         if (svg) {
           const fills = svg.querySelectorAll("[fill]");
           fills.forEach((f) => {
-            if (f.getAttribute("fill") !== "white") {
-              f.setAttribute("fill", color);
-            }
+            if (f.getAttribute("fill") !== "white") f.setAttribute("fill", color);
           });
         }
       } else {
-        // Create new marker
         const marker = new mapboxgl.Marker({ color, scale: 0.85 })
           .setLngLat([car.lon, car.lat])
           .setPopup(
@@ -506,14 +490,12 @@ export default function Map({
           e.stopPropagation();
           onSelectCar(car.device_id);
         });
-
         marker.getElement().style.cursor = "pointer";
         markersRef.current.set(car.device_id, marker);
       }
     });
   }, [fleetLatest, selectedDeviceId, mapLoaded, onSelectCar]);
 
-  // Playback ghost marker (purple)
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
@@ -534,8 +516,6 @@ export default function Map({
           )
           .addTo(map);
       }
-
-      // Update popup content
       const popup = playbackMarkerRef.current.getPopup();
       if (popup) {
         popup.setHTML(
@@ -546,70 +526,62 @@ export default function Map({
           </div>`
         );
       }
-    } else {
-      if (playbackMarkerRef.current) {
-        playbackMarkerRef.current.remove();
-        playbackMarkerRef.current = null;
-      }
+    } else if (playbackMarkerRef.current) {
+      playbackMarkerRef.current.remove();
+      playbackMarkerRef.current = null;
     }
   }, [playbackPoint, mapLoaded]);
 
-  // Fly to selected car or playback point
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
-
     let target: { lng: number; lat: number } | null = null;
-
-    if (playbackPoint) {
-      target = { lng: playbackPoint.lon, lat: playbackPoint.lat };
-    } else {
+    if (playbackPoint) target = { lng: playbackPoint.lon, lat: playbackPoint.lat };
+    else {
       const selected = fleetLatest.find((c) => c.device_id === selectedDeviceId);
-      if (selected) {
-        target = { lng: selected.lon, lat: selected.lat };
-      }
+      if (selected) target = { lng: selected.lon, lat: selected.lat };
     }
+    if (target) map.flyTo({ center: [target.lng, target.lat], speed: 1.2 });
+  }, [selectedDeviceId, playbackPoint?.lat, playbackPoint?.lon, mapLoaded, fleetLatest]);
 
-    if (target) {
-      map.flyTo({ center: [target.lng, target.lat], speed: 1.2 });
-    }
-  }, [selectedDeviceId, playbackPoint?.lat, playbackPoint?.lon, mapLoaded, fleetLatest.find(c => c.device_id === selectedDeviceId)?.lat, fleetLatest.find(c => c.device_id === selectedDeviceId)?.lon]);
-
-  // Update history trail - draw per-segment features so each carries a speed value_kmh property
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
-
-    const source = map.getSource("history-trail") as mapboxgl.GeoJSONSource | undefined;
-    if (!source) return;
+    const trailSource = map.getSource("history-trail") as mapboxgl.GeoJSONSource | undefined;
+    const arrowSource = map.getSource("history-arrows") as mapboxgl.GeoJSONSource | undefined;
+    if (!trailSource || !arrowSource) return;
 
     if (selectedHistory.length > 1) {
-      // Safeguard: Sort history chronologically before drawing segments
-      const sortedHistory = [...selectedHistory].sort((a, b) => 
-        new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-      );
-
+      const sortedHistory = [...selectedHistory].sort((a,b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
       const features: GeoJSON.Feature<GeoJSON.LineString>[] = [];
+      const arrowFeatures: GeoJSON.Feature<GeoJSON.Point>[] = [];
+
       for (let i = 0; i < sortedHistory.length - 1; i++) {
-        const a = sortedHistory[i];
-        const b = sortedHistory[i + 1];
-        const avgSpeed = (a.speed_kmh + b.speed_kmh) / 2;
+        const a = sortedHistory[i], b = sortedHistory[i+1];
         features.push({
           type: "Feature",
-          properties: { speed_kmh: avgSpeed },
-          geometry: {
-            type: "LineString",
-            coordinates: [[a.lon, a.lat], [b.lon, b.lat]],
-          },
+          properties: { speed_kmh: (a.speed_kmh + b.speed_kmh) / 2 },
+          geometry: { type: "LineString", coordinates: [[a.lon, a.lat], [b.lon, b.lat]] },
         });
+
+        if (i % 3 === 0) {
+          const dx = b.lon - a.lon, dy = b.lat - a.lat;
+          const bearing = (Math.atan2(dx, dy) * 180) / Math.PI;
+          arrowFeatures.push({
+            type: "Feature",
+            properties: { bearing },
+            geometry: { type: "Point", coordinates: [a.lon, a.lat] },
+          });
+        }
       }
-      source.setData({ type: "FeatureCollection", features });
+      trailSource.setData({ type: "FeatureCollection", features });
+      arrowSource.setData({ type: "FeatureCollection", features: arrowFeatures });
     } else {
-      source.setData({ type: "FeatureCollection", features: [] });
+      trailSource.setData({ type: "FeatureCollection", features: [] });
+      arrowSource.setData({ type: "FeatureCollection", features: [] });
     }
   }, [selectedHistory, mapLoaded]);
 
-  // Toggle traffic layer visibility
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
@@ -617,150 +589,103 @@ export default function Map({
       map.setLayoutProperty("traffic-layer", "visibility", showTraffic ? "visible" : "none");
     }
   }, [showTraffic, mapLoaded]);
-  // Detect stops (stationary > 2 min) from history gaps and render markers
+
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
-
     const source = map.getSource("stop-points") as mapboxgl.GeoJSONSource | undefined;
     if (!source) return;
 
-    const STOP_THRESHOLD_MS = 2 * 60 * 1000; // 2 minutes
+    const STOP_THRESHOLD_MS = 2 * 60 * 1000;
     const features: GeoJSON.Feature<GeoJSON.Point>[] = [];
-
-    // Safeguard: Sort history chronologically before calculating stops
-    const sortedHistory = [...selectedHistory].sort((a, b) => 
-      new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-    );
+    const sortedHistory = [...selectedHistory].sort((a,b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
     for (let i = 0; i < sortedHistory.length - 1; i++) {
-      const curr = sortedHistory[i];
-      const next = sortedHistory[i + 1];
-      const tCurr = new Date(curr.created_at).getTime();
-      const tNext = new Date(next.created_at).getTime();
-      const gapMs = tNext - tCurr;
-
+      const curr = sortedHistory[i], next = sortedHistory[i+1];
+      const gapMs = new Date(next.created_at).getTime() - new Date(curr.created_at).getTime();
       if (gapMs >= STOP_THRESHOLD_MS) {
         const gapMin = Math.round(gapMs / 60000);
-        const label = gapMin >= 60
-          ? `${Math.floor(gapMin / 60)}h ${gapMin % 60}m`
-          : `${gapMin} min`;
+        const label = gapMin >= 60 ? `${Math.floor(gapMin / 60)}h ${gapMin % 60}m` : `${gapMin} min`;
         features.push({
           type: "Feature",
-          properties: {
-            duration_text: `Stopped for ${label}`,
-            label: `P ${label}`,
-          },
+          properties: { duration_text: `Stopped for ${label}`, label: `P ${label}` },
           geometry: { type: "Point", coordinates: [curr.lon, curr.lat] },
         });
       }
     }
 
+    if (sortedHistory.length > 0) {
+      const latest = sortedHistory[sortedHistory.length - 1];
+      const idleMs = Date.now() - new Date(latest.created_at).getTime();
+      if (idleMs > STOP_THRESHOLD_MS) {
+        const idleMin = Math.round(idleMs / 60000);
+        const label = idleMin >= 60 ? `${Math.floor(idleMin / 60)}h ${idleMin % 60}m` : `${idleMin} min`;
+        features.push({
+          type: "Feature",
+          properties: { duration_text: `Stationary for ${label}`, label: `P ${label}` },
+          geometry: { type: "Point", coordinates: [latest.lon, latest.lat] },
+        });
+      }
+    }
     source.setData({ type: "FeatureCollection", features });
   }, [selectedHistory, mapLoaded]);
 
-
-  // Update route lines
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
-
-    // Clear all alt routes
     for (let i = 0; i < 3; i++) {
-      const source = map.getSource(`route-alt-${i}`) as mapboxgl.GeoJSONSource | undefined;
-      if (source) {
-        source.setData({ type: "FeatureCollection", features: [] });
-      }
+      const s = map.getSource(`route-alt-${i}`) as mapboxgl.GeoJSONSource | undefined;
+      if (s) s.setData({ type: "FeatureCollection", features: [] });
     }
-
-    const selectedSource = map.getSource("route-selected") as mapboxgl.GeoJSONSource | undefined;
-    if (selectedSource) {
-      selectedSource.setData({ type: "FeatureCollection", features: [] });
-    }
-
-    if (alternativeRoutes.length > 1) {
-      // Draw non-selected routes as alternatives
-      alternativeRoutes.forEach((route, i) => {
-        if (i === selectedRouteIndex || route.routeLine.length === 0) return;
-        const source = map.getSource(`route-alt-${i}`) as mapboxgl.GeoJSONSource | undefined;
-        if (source) {
-          const coords: [number, number][] = route.routeLine.map(([lat, lng]) => [lng, lat]);
-          source.setData({
-            type: "Feature",
-            properties: {},
-            geometry: { type: "LineString", coordinates: coords },
-          });
-        }
-      });
-
-      // Draw selected route on top
-      const sel = alternativeRoutes[selectedRouteIndex];
-      if (sel && sel.routeLine.length > 0 && selectedSource) {
-        const coords: [number, number][] = sel.routeLine.map(([lat, lng]) => [lng, lat]);
-        const colors = ["#10b981", "#3b82f6", "#f59e0b"];
-        map.setPaintProperty("route-selected-line", "line-color", colors[selectedRouteIndex] || "#10b981");
-        selectedSource.setData({
-          type: "Feature",
-          properties: {},
-          geometry: { type: "LineString", coordinates: coords },
+    const selSource = map.getSource("route-selected") as mapboxgl.GeoJSONSource | undefined;
+    if (selSource) {
+      selSource.setData({ type: "FeatureCollection", features: [] });
+      if (alternativeRoutes.length > 1) {
+        alternativeRoutes.forEach((route, i) => {
+          if (i === selectedRouteIndex || route.routeLine.length === 0) return;
+          const altS = map.getSource(`route-alt-${i}`) as mapboxgl.GeoJSONSource | undefined;
+          if (altS) altS.setData({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: route.routeLine.map(([lat, lng]) => [lng, lat]) } });
         });
+        const sel = alternativeRoutes[selectedRouteIndex];
+        if (sel && sel.routeLine.length > 0) {
+          map.setPaintProperty("route-selected-line", "line-color", ["#10b981", "#3b82f6", "#f59e0b"][selectedRouteIndex] || "#10b981");
+          selSource.setData({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: sel.routeLine.map(([lat, lng]) => [lng, lat]) } });
+        }
+      } else if (etaInfo && etaInfo.routeLine.length > 0) {
+        selSource.setData({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: etaInfo.routeLine.map(([lat, lng]) => [lng, lat]) } });
       }
-    } else if (etaInfo && etaInfo.routeLine.length > 0 && selectedSource) {
-      const coords: [number, number][] = etaInfo.routeLine.map(([lat, lng]) => [lng, lat]);
-      selectedSource.setData({
-        type: "Feature",
-        properties: {},
-        geometry: { type: "LineString", coordinates: coords },
-      });
     }
   }, [etaInfo, alternativeRoutes, selectedRouteIndex, mapLoaded]);
 
-  // Update geofences
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded) return;
-
-    const source = map.getSource("geofences") as mapboxgl.GeoJSONSource | undefined;
-    if (!source) return;
-
+    const s = map.getSource("geofences") as mapboxgl.GeoJSONSource | undefined;
+    if (!s) return;
     if (geofences.length > 0) {
-      console.log(`Map: Updating ${geofences.length} geofences...`);
-      const features = geofences.map((gf) =>
-        createGeoJSONCircle([gf.lon, gf.lat], Number(gf.radius_meters) / 1000)
-      );
-      source.setData({ type: "FeatureCollection", features });
-    } else {
-      console.log("Map: Clearing geofences.");
-      source.setData({ type: "FeatureCollection", features: [] });
-    }
+      const features = geofences.map((gf) => createGeoJSONCircle([gf.lon, gf.lat], Number(gf.radius_meters) / 1000));
+      s.setData({ type: "FeatureCollection", features });
+    } else s.setData({ type: "FeatureCollection", features: [] });
   }, [geofences, mapLoaded]);
 
-  // Focus helper functions
   const flyToCar = useCallback(() => {
-    const map = mapRef.current;
-    if (!map) return;
     const selected = fleetLatest.find((c) => c.device_id === selectedDeviceId);
-    if (selected) {
-      map.flyTo({ center: [selected.lon, selected.lat], zoom: 16, speed: 1.5 });
-    }
+    if (selected && mapRef.current) mapRef.current.flyTo({ center: [selected.lon, selected.lat], zoom: 16, speed: 1.5 });
   }, [fleetLatest, selectedDeviceId]);
 
   const flyToDestination = useCallback(() => {
-    const map = mapRef.current;
-    if (!map || !etaInfo || etaInfo.routeLine.length === 0) return;
-    const lastPt = etaInfo.routeLine[etaInfo.routeLine.length - 1];
-    map.flyTo({ center: [lastPt[1], lastPt[0]], zoom: 16, speed: 1.5 });
+    if (etaInfo && etaInfo.routeLine.length > 0 && mapRef.current) {
+      const lastPt = etaInfo.routeLine[etaInfo.routeLine.length - 1];
+      mapRef.current.flyTo({ center: [lastPt[1], lastPt[0]], zoom: 16, speed: 1.5 });
+    }
   }, [etaInfo]);
 
-  const selectedCarLatest = fleetLatest.find((c) => c.device_id === selectedDeviceId);
-  const hasCarPos = !!selectedCarLatest;
+  const hasCarPos = !!fleetLatest.find((c) => c.device_id === selectedDeviceId);
   const hasDestPos = !!(etaInfo && etaInfo.routeLine.length > 0);
 
   return (
     <div className="relative w-full h-full rounded-2xl overflow-hidden border border-slate-700 shadow-xl">
       <div ref={mapContainerRef} className="w-full h-full" />
-
-      {/* Speed Legend */}
       <div className="absolute top-3 left-3 z-10 bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-xl p-2.5 flex flex-col gap-1 text-[10px]">
         <div className="text-slate-400 font-bold uppercase tracking-widest mb-0.5">Speed</div>
         {[
@@ -775,36 +700,20 @@ export default function Map({
           </div>
         ))}
       </div>
-
-      {/* Floating Controls */}
       <div className="absolute bottom-8 right-6 lg:bottom-6 lg:right-6 z-10 flex flex-col gap-2">
-        {/* Traffic Toggle */}
         <button
           onClick={() => setShowTraffic(t => !t)}
-          className={`p-2 rounded-lg shadow-lg border transition-all active:scale-95 text-[10px] font-bold ${
-            showTraffic
-              ? "bg-amber-500 border-amber-400 text-white"
-              : "bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700"
-          }`}
-          title="Toggle Traffic"
+          className={`p-2 rounded-lg shadow-lg border transition-all active:scale-95 text-[10px] font-bold ${showTraffic ? "bg-amber-500 border-amber-400 text-white" : "bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700"}`}
         >
           LIVE TRAFFIC
         </button>
         {hasCarPos && (
-          <button
-            onClick={flyToCar}
-            className="bg-blue-600 text-white p-3 rounded-full shadow-lg border border-blue-500 hover:bg-blue-500 transition-transform active:scale-95"
-            title="Focus on Car"
-          >
+          <button onClick={flyToCar} className="bg-blue-600 text-white p-3 rounded-full shadow-lg border border-blue-500 hover:bg-blue-500 transition-transform active:scale-95">
             <Crosshair className="w-5 h-5" />
           </button>
         )}
         {hasDestPos && (
-          <button
-            onClick={flyToDestination}
-            className="bg-emerald-600 text-white p-3 rounded-full shadow-lg border border-emerald-500 hover:bg-emerald-500 transition-transform active:scale-95"
-            title="Focus on Destination"
-          >
+          <button onClick={flyToDestination} className="bg-emerald-600 text-white p-3 rounded-full shadow-lg border border-emerald-500 hover:bg-emerald-500 transition-transform active:scale-95">
             <MapPin className="w-5 h-5" />
           </button>
         )}
@@ -812,4 +721,3 @@ export default function Map({
     </div>
   );
 }
-

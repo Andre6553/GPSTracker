@@ -70,8 +70,8 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
 const isJitter = (prev: TelemetryPoint | null, curr: TelemetryPoint) => {
   if (!prev) return false;
   const distM = haversineKm(prev.lat, prev.lon, curr.lat, curr.lon) * 1000;
-  // Professional-grade stationary lock: 25m or 5km/h required to move
-  return distM < 25 && curr.speed_kmh < 5;
+  // Professional-grade stationary lock: 10m or 5km/h required to move
+  return distM < 10 && curr.speed_kmh < 5;
 };
 
 // Filter out stationary jitter (GPS drift when parket)
