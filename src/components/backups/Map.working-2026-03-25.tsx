@@ -92,36 +92,6 @@ function createGeoJSONCircle(center: [number, number], radiusKm: number, points 
   };
 }
 
-const TRAIL_ARROW_IMAGE_ID = "trail-arrow";
-
-/** Points north (up) in canvas space; rotated by `bearing` in symbol layer. */
-function createTrailArrowCanvas(): HTMLCanvasElement {
-  const s = 64;
-  const c = document.createElement("canvas");
-  c.width = s;
-  c.height = s;
-  const ctx = c.getContext("2d");
-  if (!ctx) return c;
-  ctx.clearRect(0, 0, s, s);
-  ctx.fillStyle = "#f8fafc";
-  ctx.strokeStyle = "#0f172a";
-  ctx.lineWidth = 2.5;
-  ctx.beginPath();
-  ctx.moveTo(s / 2, 8);
-  ctx.lineTo(s - 10, s - 12);
-  ctx.lineTo(s / 2, s - 22);
-  ctx.lineTo(10, s - 12);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  return c;
-}
-
-function ensureTrailArrowImage(map: mapboxgl.Map) {
-  if (map.hasImage(TRAIL_ARROW_IMAGE_ID)) return;
-  map.addImage(TRAIL_ARROW_IMAGE_ID, createTrailArrowCanvas(), { pixelRatio: 2 });
-}
-
 export default function Map({
   fleetLatest,
   selectedDeviceId,
@@ -195,26 +165,21 @@ export default function Map({
         },
       });
 
-      // Direction of travel (arrow symbols, rotated by geographic bearing)
+      // Directional markers (circles)
       map.addSource("history-arrows", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
       });
-      ensureTrailArrowImage(map);
       map.addLayer({
         id: "history-arrows-layer",
-        type: "symbol",
+        type: "circle",
         source: "history-arrows",
-        layout: {
-          "icon-image": TRAIL_ARROW_IMAGE_ID,
-          "icon-size": 0.42,
-          "icon-rotate": ["get", "bearing"],
-          "icon-rotation-alignment": "map",
-          "icon-allow-overlap": true,
-          "icon-ignore-placement": true,
-        },
         paint: {
-          "icon-opacity": 0.95,
+          "circle-radius": 5,
+          "circle-color": "#ffffff",
+          "circle-stroke-width": 2,
+          "circle-stroke-color": "#facc15",
+          "circle-opacity": 1.0,
         },
       });
 
@@ -401,21 +366,16 @@ export default function Map({
           type: "geojson",
           data: { type: "FeatureCollection", features: [] },
         });
-        ensureTrailArrowImage(map);
         map.addLayer({
           id: "history-arrows-layer",
-          type: "symbol",
+          type: "circle",
           source: "history-arrows",
-          layout: {
-            "icon-image": TRAIL_ARROW_IMAGE_ID,
-            "icon-size": 0.42,
-            "icon-rotate": ["get", "bearing"],
-            "icon-rotation-alignment": "map",
-            "icon-allow-overlap": true,
-            "icon-ignore-placement": true,
-          },
           paint: {
-            "icon-opacity": 0.95,
+            "circle-radius": 5,
+            "circle-color": "#ffffff",
+            "circle-stroke-width": 2,
+            "circle-stroke-color": "#facc15",
+            "circle-opacity": 1.0,
           },
         });
       }
@@ -695,6 +655,10 @@ export default function Map({
       
       const beadSource = map.getSource("history-beads") as mapboxgl.GeoJSONSource | undefined;
       
+      // 1. Log First Coordinate for Audit
+      const first = sortedHistory[0];
+      console.log("TRACE START COORD:", [Number(first.lon), Number(first.lat)]);
+
       // 2. Multi-colored segments (Colored by speed)
       const lineFeatures: GeoJSON.Feature<GeoJSON.LineString>[] = [];
       for (let i = 0; i < sortedHistory.length - 1; i++) {
@@ -723,29 +687,19 @@ export default function Map({
         });
       }
 
-      // 4. Direction arrows along trail (subsample so dense GPS doesn’t stack thousands of icons)
+      // 4. Directional Arrows
       const arrowFeatures: GeoJSON.Feature<GeoJSON.Point>[] = [];
-      const segments = sortedHistory.length - 1;
-      const maxArrows = 120;
-      const arrowStep = Math.max(1, Math.ceil(segments / maxArrows));
-      for (let i = 0; i < segments; i += arrowStep) {
-        const a = sortedHistory[i],
-          b = sortedHistory[i + 1];
-        const latA = Number(a.lat),
-          lonA = Number(a.lon);
-        const latB = Number(b.lat),
-          lonB = Number(b.lon);
+      for (let i = 0; i < sortedHistory.length - 1; i += 5) {
+        const a = sortedHistory[i], b = sortedHistory[i+1];
+        const latA = Number(a.lat), lonA = Number(a.lon);
+        const latB = Number(b.lat), lonB = Number(b.lon);
         if (isNaN(latA) || isNaN(lonA) || isNaN(latB) || isNaN(lonB)) continue;
-        const distKm =
-          Math.hypot(latB - latA, lonB - lonA) * 111;
-        if (distKm < 0.002) continue;
-        const bearing = calculateBearing(latA, lonA, latB, lonB);
-        const midLon = (lonA + lonB) / 2;
-        const midLat = (latA + latB) / 2;
+        const dx = lonB - lonA, dy = latB - latA;
+        const bearing = (Math.atan2(dx, dy) * 180) / Math.PI;
         arrowFeatures.push({
           type: "Feature",
           properties: { bearing },
-          geometry: { type: "Point", coordinates: [midLon, midLat] },
+          geometry: { type: "Point", coordinates: [lonA, latA] },
         });
       }
       arrowSource.setData({ type: "FeatureCollection", features: arrowFeatures });
@@ -755,6 +709,7 @@ export default function Map({
         if (map.getLayer(id)) map.moveLayer(id);
       });
 
+      console.log("MAP UPDATED: ", lineFeatures.length, "segments,", sortedHistory.length, "beads");
     } else {
       trailSource.setData({ type: "FeatureCollection", features: [] });
       arrowSource.setData({ type: "FeatureCollection", features: [] });
