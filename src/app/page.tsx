@@ -22,8 +22,10 @@ const ensureUTC = (dateStr: string | undefined | null) => {
   return new Date(clean);
 };
 
+import type { MapProps } from "@/components/Map";
+
 // Dynamically import map to avoid Next.js Server-Side Rendering errors with Mapbox GL
-const LiveMap = dynamic(() => import("@/components/Map").then((m) => m.default), {
+const LiveMap = dynamic<MapProps>(() => import("@/components/Map").then((m) => m.default), {
   ssr: false,
   loading: () => (
     <div className="w-full h-full bg-slate-900 animate-pulse rounded-2xl flex items-center justify-center text-slate-500">
@@ -194,7 +196,7 @@ export default function Dashboard() {
 
   // Auth Guard
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data: { session: activeSession } }) => {
+    supabase.auth.getSession().then(async ({ data: { session: activeSession } }: { data: { session: any } }) => {
       if (!activeSession) {
         router.push("/login");
       } else {
@@ -358,8 +360,8 @@ export default function Dashboard() {
     loadLatestPositions();
 
     const channel = supabase.channel("live-telemetry")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "telemetry" }, (payload) => {
-        const newData = payload.new as TelemetryPoint;
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "telemetry" }, (payload: { new: TelemetryPoint }) => {
+        const newData = payload.new;
         if (assignedDevices.includes(newData.device_id)) {
           setLastHeard(prev => ({ ...prev, [newData.device_id]: newData.created_at }));
           setAllData(prev => {
@@ -1198,7 +1200,7 @@ export default function Dashboard() {
           onSelectCar={setSelectedDeviceId}
           playbackPoint={playbackPoint}
           geofences={geofences}
-          onMapClick={isAddingGeofence ? (lat, lon) => setNewGeofencePos({ lat, lon }) : undefined}
+          onMapClick={isAddingGeofence ? (lat: number, lon: number) => setNewGeofencePos({ lat, lon }) : undefined}
           isAddingGeofence={isAddingGeofence}
           isDarkMode={isDarkMode}
         />

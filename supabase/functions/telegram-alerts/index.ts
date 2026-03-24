@@ -13,7 +13,7 @@ interface TelemetryPayload {
   speed_kmh: number;
 }
 
-Deno.serve(async (req) => {
+Deno.serve(async (req: Request) => {
   try {
     const payload = await req.json();
     const { device_id, lat, lon, speed_kmh } = payload.record as TelemetryPayload;
@@ -93,7 +93,8 @@ Deno.serve(async (req) => {
     return new Response('OK');
   } catch (err) {
     console.error(err);
-    return new Response(err.message, { status: 500 });
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    return new Response(message, { status: 500 });
   }
 });
 

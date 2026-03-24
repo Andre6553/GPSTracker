@@ -5,7 +5,7 @@ import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { Crosshair, MapPin, Activity } from "lucide-react";
 
-interface TelemetryPoint {
+export interface TelemetryPoint {
   device_id: string;
   lat: number;
   lon: number;
@@ -15,7 +15,7 @@ interface TelemetryPoint {
   created_at: string;
 }
 
-interface Geofence {
+export interface Geofence {
   id: string;
   name: string;
   lat: number;
@@ -23,7 +23,7 @@ interface Geofence {
   radius_meters: number;
 }
 
-interface MapProps {
+export interface MapProps {
   fleetLatest: TelemetryPoint[];
   selectedDeviceId: string | null;
   selectedHistory: TelemetryPoint[];
