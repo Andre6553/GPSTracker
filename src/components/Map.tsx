@@ -39,6 +39,28 @@ export interface MapProps {
   isDarkMode?: boolean;
 }
 
+// Must match after every style reload (theme toggle); otherwise trail reverts to solid color or breaks.
+const HISTORY_TRAIL_LINE_LAYOUT: mapboxgl.LineLayout = {
+  "line-join": "round",
+  "line-cap": "round",
+};
+
+const HISTORY_TRAIL_LINE_PAINT: mapboxgl.LinePaint = {
+  "line-color": [
+    "step",
+    ["to-number", ["get", "speed_kmh"]],
+    "#3b82f6",
+    30,
+    "#10b981",
+    60,
+    "#f59e0b",
+    100,
+    "#ef4444",
+  ],
+  "line-width": 5,
+  "line-opacity": 0.85,
+};
+
 // Generate circle polygon coordinates for geofences
 function calculateBearing(lat1: number, lon1: number, lat2: number, lon2: number) {
   const φ1 = (lat1 * Math.PI) / 180;
@@ -88,6 +110,7 @@ export default function Map({
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<globalThis.Map<string, mapboxgl.Marker>>(new globalThis.Map());
   const playbackMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const skipInitialThemeStyleRef = useRef(true);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [showTraffic, setShowTraffic] = useState(false);
 
@@ -121,15 +144,8 @@ export default function Map({
         id: "history-trail-line",
         type: "line",
         source: "history-trail",
-        layout: { "line-join": "round", "line-cap": "round" },
-        paint: {
-          "line-color": [
-            "step", ["get", "speed_kmh"],
-            "#3b82f6", 30, "#10b981", 60, "#f59e0b", 100, "#ef4444"
-          ],
-          "line-width": 5,
-          "line-opacity": 0.85,
-        },
+        layout: HISTORY_TRAIL_LINE_LAYOUT,
+        paint: HISTORY_TRAIL_LINE_PAINT,
       });
 
       // Neon Beads (High-visibility marker for every GPS point)
@@ -293,6 +309,7 @@ export default function Map({
     mapRef.current = map;
 
     return () => {
+      skipInitialThemeStyleRef.current = true;
       map.remove();
       mapRef.current = null;
       setMapLoaded(false);
@@ -304,6 +321,13 @@ export default function Map({
     if (!map) return;
     const newStyle = isDarkMode ? "mapbox://styles/mapbox/dark-v11" : "mapbox://styles/mapbox/streets-v12";
 
+    // First paint already uses newStyle in map constructor; avoid setStyle() which wipes layers
+    // and drops speed-based trail until re-fetch — and matched the old bug where re-added trail was solid yellow.
+    if (skipInitialThemeStyleRef.current) {
+      skipInitialThemeStyleRef.current = false;
+      return;
+    }
+
     map.once("style.load", () => {
       if (!map.getSource("history-trail")) {
         map.addSource("history-trail", {
@@ -314,12 +338,8 @@ export default function Map({
           id: "history-trail-line",
           type: "line",
           source: "history-trail",
-          layout: { "line-join": "round", "line-cap": "round" },
-          paint: {
-            "line-color": "#facc15",
-            "line-width": 8,
-            "line-opacity": 0.95,
-          },
+          layout: HISTORY_TRAIL_LINE_LAYOUT,
+          paint: HISTORY_TRAIL_LINE_PAINT,
         });
       }
 

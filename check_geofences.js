@@ -10,7 +10,7 @@ async function check() {
       throw new Error("Set SUPABASE_SERVICE_ROLE_KEY or NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local");
     }
 
-    const urlRecent = `${base}/rest/v1/telemetry?order=created_at.desc&limit=5&select=*`;
+    const urlRecent = `${base}/rest/v1/geofences?select=*`;
     const res = await fetch(urlRecent, {
       headers: { apikey: key, Authorization: `Bearer ${key}` },
     });
@@ -22,15 +22,15 @@ async function check() {
     }
 
     const len = Array.isArray(data) ? data.length : 0;
-    console.log(`Found ${len} RECENT records.`);
+    console.log(`Found ${len} GEOFENCE records.`);
 
     if (len > 0) {
-      console.log("Latest records:", JSON.stringify(data, null, 2));
+      console.log("Geofence records:", JSON.stringify(data, null, 2));
     } else {
-      console.log("Table is EMPTY or RLS blocked (try service role in .env.local).");
+      console.log("Geofences table is EMPTY or RLS blocked (try service role in .env.local).");
     }
 
-    fs.writeFileSync("recent_telemetry.json", JSON.stringify(data, null, 2));
+    fs.writeFileSync("geofences_dump.json", JSON.stringify(data, null, 2));
   } catch (e) {
     console.error(e);
   }

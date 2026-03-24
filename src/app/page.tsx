@@ -173,7 +173,7 @@ export default function Dashboard() {
   const sendRemoteCommand = async (command: string, targetId?: string) => {
     const target = targetId || selectedDeviceId;
     if (!target) return;
-    
+
     setCmdStatus({ msg: `Sending ${command} to ${target}...`, type: "loading" });
     try {
       // Use the new COMMAND:DEVICE_ID format

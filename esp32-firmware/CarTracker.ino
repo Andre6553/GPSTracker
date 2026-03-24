@@ -30,6 +30,8 @@ Adafruit_MQTT_Subscribe throttle = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "
 // Hardware
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
+// Dual-color SSD1306: ~16px top is yellow; keep title bar full height so body text starts in blue zone only
+#define OLED_COLOR_SPLIT_Y 16
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 TinyGPSPlus gps;
 HardwareSerial gpsSerial(2);
@@ -42,11 +44,15 @@ unsigned long lastDisplayUpdate = 0;
 unsigned long lastSyncCheck = 0;
 const unsigned long PUBLISH_INTERVAL = 10000;
 const unsigned long SYNC_INTERVAL = 15000;
-size_t lastSyncOffset = 0; 
+size_t lastSyncOffset = 0;
+
+// Reject stale coordinates if NMEA hasn't refreshed location (ms). Tunnel / loss-of-lock guard.
+const unsigned long MAX_FIX_AGE_MS = 45000;
 
 void MQTT_connect();
 void processOfflineSync();
 void pushToSupabase(double lat, double lon, double speed, double alt, int sats, const char* timestamp = nullptr);
+void renderDashboardOLED();
 
 void setup() {
   Serial.begin(115200);
@@ -57,9 +63,16 @@ void setup() {
     Serial.println(F("OLED Failed"));
   }
   display.clearDisplay();
+  display.fillRect(0, 0, SCREEN_WIDTH, OLED_COLOR_SPLIT_Y, SSD1306_WHITE);
+  display.setTextColor(SSD1306_BLACK);
+  display.setTextSize(1);
+  display.setCursor(3, 3);
+  display.print(F("CAR TRACKER"));
   display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0,0);
-  display.print("STABLE MODE: "); display.println(DEVICE_ID);
+  display.setCursor(0, OLED_COLOR_SPLIT_Y + 2);
+  display.printf("%.16s", DEVICE_ID);
+  display.setCursor(0, OLED_COLOR_SPLIT_Y + 12);
+  display.print(F("WiFi / GPS init..."));
   display.display();
 
   wifiMulti.addAP(WIFI_HOME_SSID, WIFI_HOME_PASS);
@@ -130,9 +143,9 @@ void loop() {
     yield(); 
   }
 
-  // Periodic Telemetry (Only push if location is fresh/updated)
+  // Periodic Telemetry (valid fix + not stale — avoids isUpdated() missing publishes on long intervals)
   if (millis() - lastCloudPublish > PUBLISH_INTERVAL) {
-    if (gps.location.isValid() && gps.location.isUpdated()) {
+    if (gps.location.isValid() && gps.location.age() < MAX_FIX_AGE_MS) {
       if (mqtt.connected()) {
         String csv = String(gps.location.lat(), 6) + "," + String(gps.location.lng(), 6) + "," + String(gps.speed.kmph()) + "," + String(gps.altitude.meters());
         carTracker.publish(csv.c_str());
@@ -163,16 +176,85 @@ void loop() {
   }
 
   if (millis() - lastDisplayUpdate > 5000) {
-    display.clearDisplay();
-    display.setCursor(0,0);
-    display.printf("Sats: %d\n", gps.satellites.value());
-    display.printf("Lat: %.4f\n", gps.location.lat());
-    display.printf("Lon: %.4f\n", gps.location.lng());
-    display.printf("Net: %s\n", (WiFi.status() == WL_CONNECTED ? "OK" : "ERR"));
-    display.display();
+    renderDashboardOLED();
     lastDisplayUpdate = millis();
     yield();
   }
+}
+
+// Status screen: inverted title bar, fix/SV/HDOP, coords, speed, WiFi RSSI + lock
+void renderDashboardOLED() {
+  const uint8_t hdrH = OLED_COLOR_SPLIT_Y;
+  display.clearDisplay();
+  display.fillRect(0, 0, SCREEN_WIDTH, hdrH, SSD1306_WHITE);
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_BLACK);
+  display.setCursor(3, 3);
+  display.print(F("TRACKER"));
+  char idBanner[20];
+  snprintf(idBanner, sizeof idBanner, "%.12s", DEVICE_ID);
+  int16_t xId = (int16_t)(SCREEN_WIDTH - 3 - (int)strlen(idBanner) * 6);
+  if (xId < 52) xId = 52;
+  display.setCursor(xId, 3);
+  display.print(idBanner);
+
+  display.setTextColor(SSD1306_WHITE);
+  // First row of body must start below yellow band to avoid clipped / speckled text
+  int y = hdrH + 1;
+  const bool fix = gps.location.isValid();
+  const uint32_t ageMs = fix ? gps.location.age() : 0;
+  const bool stale = fix && (ageMs >= MAX_FIX_AGE_MS);
+
+  display.setCursor(0, y);
+  if (!fix) {
+    display.print(F("GPS  search"));
+  } else if (stale) {
+    display.printf("GPS  old %lus", (unsigned long)(ageMs / 1000));
+  } else {
+    display.printf("GPS  ok %lus", (unsigned long)(ageMs / 1000));
+  }
+  y += 8;
+
+  display.setCursor(0, y);
+  uint8_t sv = gps.satellites.isValid() ? (uint8_t)gps.satellites.value() : 0;
+  display.printf("SV %2u", sv);
+  if (gps.hdop.isValid()) {
+    display.printf("  HDOP %.1f", gps.hdop.hdop());
+  }
+  y += 8;
+
+  display.setCursor(0, y);
+  if (fix && !stale) {
+    display.printf("%.5f", gps.location.lat());
+  } else {
+    display.print(F("LAT  ---"));
+  }
+  y += 8;
+
+  display.setCursor(0, y);
+  if (fix && !stale) {
+    display.printf("%.5f", gps.location.lng());
+  } else {
+    display.print(F("LON  ---"));
+  }
+  y += 8;
+
+  const bool locked = (digitalRead(RELAY_PIN) == LOW);
+  display.setCursor(0, y);
+  // One line: speed + RSSI + lock (saves a row so layout fits below 16px header)
+  if (fix && !stale) {
+    display.printf("%3.0fk ", gps.speed.kmph());
+  } else {
+    display.print(F("---k "));
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    display.printf("%+4ld ", WiFi.RSSI());
+  } else {
+    display.print(F(" --- "));
+  }
+  display.print(locked ? F("LK") : F("UL"));
+
+  display.display();
 }
 
 void processOfflineSync() {
