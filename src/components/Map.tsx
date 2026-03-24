@@ -559,28 +559,38 @@ export default function Map({
     if (!trailSource || !arrowSource) return;
 
     if (selectedHistory.length > 1) {
+      console.log("MAP UPDATING TRACE:", selectedHistory.length, "pts");
       const sortedHistory = [...selectedHistory].sort((a,b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      
       const features: GeoJSON.Feature<GeoJSON.LineString>[] = [];
       const arrowFeatures: GeoJSON.Feature<GeoJSON.Point>[] = [];
 
       for (let i = 0; i < sortedHistory.length - 1; i++) {
         const a = sortedHistory[i], b = sortedHistory[i+1];
+        
+        // Strict Numeric Casting to prevent NaN errors in Mapbox expressions
+        const latA = Number(a.lat), lonA = Number(a.lon), speedA = Number(a.speed_kmh);
+        const latB = Number(b.lat), lonB = Number(b.lon), speedB = Number(b.speed_kmh);
+        
+        if (isNaN(latA) || isNaN(lonA) || isNaN(latB) || isNaN(lonB)) continue;
+
         features.push({
           type: "Feature",
-          properties: { speed_kmh: (a.speed_kmh + b.speed_kmh) / 2 },
-          geometry: { type: "LineString", coordinates: [[a.lon, a.lat], [b.lon, b.lat]] },
+          properties: { speed_kmh: (speedA + speedB) / 2 },
+          geometry: { type: "LineString", coordinates: [[lonA, latA], [lonB, latB]] },
         });
 
         if (i % 3 === 0) {
-          const dx = b.lon - a.lon, dy = b.lat - a.lat;
+          const dx = lonB - lonA, dy = latB - latA;
           const bearing = (Math.atan2(dx, dy) * 180) / Math.PI;
           arrowFeatures.push({
             type: "Feature",
             properties: { bearing },
-            geometry: { type: "Point", coordinates: [a.lon, a.lat] },
+            geometry: { type: "Point", coordinates: [lonA, latA] },
           });
         }
       }
+      console.log("GENERATED FEATURES:", features.length, "lines,", arrowFeatures.length, "arrows");
       trailSource.setData({ type: "FeatureCollection", features });
       arrowSource.setData({ type: "FeatureCollection", features: arrowFeatures });
     } else {

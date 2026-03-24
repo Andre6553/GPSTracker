@@ -421,6 +421,7 @@ export default function Dashboard() {
       const { data } = await query;
       if (data) {
         console.log(`FETCHED HISTORY: Found ${data.length} records for ${selectedDeviceId}`);
+        if (data.length > 0) console.log("HISTORY DATA SAMPLE:", data[0]);
         // Reverse because query was descending, then sort explicitly to be safe
         const sorted = data.reverse().sort((a, b) => 
           new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
