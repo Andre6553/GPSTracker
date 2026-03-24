@@ -123,9 +123,12 @@ export default function Map({
         source: "history-trail",
         layout: { "line-join": "round", "line-cap": "round" },
         paint: {
-          "line-color": "#facc15",
-          "line-width": 10, // Increased for fail-safe visibility
-          "line-opacity": 0.95,
+          "line-color": [
+            "step", ["get", "speed_kmh"],
+            "#3b82f6", 30, "#10b981", 60, "#f59e0b", 100, "#ef4444"
+          ],
+          "line-width": 5,
+          "line-opacity": 0.85,
         },
       });
 
@@ -139,10 +142,10 @@ export default function Map({
         type: "circle",
         source: "history-beads",
         paint: {
-          "circle-radius": 6, // Larger beads
+          "circle-radius": 3,
           "circle-color": "#ffffff",
-          "circle-stroke-width": 2,
-          "circle-stroke-color": "#facc15",
+          "circle-stroke-width": 1,
+          "circle-stroke-color": "#000000",
         },
       });
 
@@ -597,16 +600,21 @@ export default function Map({
       const first = sortedHistory[0];
       console.log("TRACE START COORD:", [Number(first.lon), Number(first.lat)]);
 
-      // 2. Single Continuous LineString wrapped in FeatureCollection
-      const coordinates = sortedHistory.map(p => [Number(p.lon), Number(p.lat)]).filter(c => !isNaN(c[0]) && !isNaN(c[1]));
-      trailSource.setData({
-        type: "FeatureCollection",
-        features: [{
+      // 2. Multi-colored segments (Colored by speed)
+      const lineFeatures: GeoJSON.Feature<GeoJSON.LineString>[] = [];
+      for (let i = 0; i < sortedHistory.length - 1; i++) {
+        const start = sortedHistory[i], end = sortedHistory[i+1];
+        const lonA = Number(start.lon), latA = Number(start.lat);
+        const lonB = Number(end.lon), latB = Number(end.lat);
+        if (isNaN(lonA) || isNaN(latA) || isNaN(lonB) || isNaN(latB)) continue;
+
+        lineFeatures.push({
           type: "Feature",
-          properties: { speed_kmh: Number(sortedHistory[0].speed_kmh) || 0 },
-          geometry: { type: "LineString", coordinates } as any
-        }]
-      });
+          properties: { speed_kmh: Number(end.speed_kmh) || 0 },
+          geometry: { type: "LineString", coordinates: [[lonA, latA], [lonB, latB]] }
+        });
+      }
+      trailSource.setData({ type: "FeatureCollection", features: lineFeatures });
 
       // 3. Neon Beads (Individual Points)
       if (beadSource) {
@@ -637,12 +645,12 @@ export default function Map({
       }
       arrowSource.setData({ type: "FeatureCollection", features: arrowFeatures });
       
-      // 5. Force Layers to Top
-      ["history-trail-line", "history-trail-beads", "history-arrows-layer"].forEach(id => {
+      // 5. Force ALL Critical Layers to Top
+      ["geofences-fill", "geofences-border", "history-trail-line", "history-trail-beads", "history-arrows-layer", "stop-circles"].forEach(id => {
         if (map.getLayer(id)) map.moveLayer(id);
       });
 
-      console.log("MAP UPDATED: 1 line,", sortedHistory.length, "beads,", arrowFeatures.length, "arrows");
+      console.log("MAP UPDATED: ", lineFeatures.length, "segments,", sortedHistory.length, "beads");
     } else {
       trailSource.setData({ type: "FeatureCollection", features: [] });
       arrowSource.setData({ type: "FeatureCollection", features: [] });
