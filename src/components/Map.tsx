@@ -1025,7 +1025,7 @@ export default function Map({
   return (
     <div className="relative w-full h-full rounded-2xl overflow-hidden border border-slate-700 shadow-xl">
       <div ref={mapContainerRef} className="w-full h-full" />
-      <div className="absolute top-3 left-3 z-10 bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-xl p-2.5 flex flex-col gap-1 text-[10px]">
+      <div className="mobile-speed-legend-safe absolute top-3 left-3 z-10 bg-slate-900/80 backdrop-blur-sm border border-slate-700 rounded-xl p-2.5 flex flex-col gap-1 text-[10px]">
         <div className="text-slate-400 font-bold uppercase tracking-widest mb-0.5">Speed</div>
         {[
           { color: "#3b82f6", label: "0 - 60 km/h" },

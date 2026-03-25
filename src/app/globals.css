@@ -41,3 +41,23 @@ body {
   background: #475569;
 }
 
+/* Mobile overlay safety: avoid map UI overlaps with floating hamburger button. */
+@media (max-width: 1023px) {
+  .mobile-search-safe {
+    /* Reserve room for the top-left floating menu button in portrait. */
+    padding-left: 5.25rem;
+  }
+}
+
+@media (max-width: 1023px) and (orientation: landscape) {
+  .mobile-search-safe {
+    /* Landscape has less vertical room; keep full horizontal search width. */
+    padding-left: 1rem;
+  }
+
+  .mobile-speed-legend-safe {
+    /* Push speed legend below hamburger in landscape phones/tablets. */
+    top: 4.75rem !important;
+  }
+}
+
