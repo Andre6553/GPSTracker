@@ -52,6 +52,11 @@ body {
     /* Keep legend clear of hamburger + centered search bar on portrait phones. */
     top: 5.25rem !important;
   }
+
+  .mobile-map-safe .mapboxgl-ctrl-top-right {
+    /* Move Mapbox +/- controls below centered search bar on portrait mobile. */
+    top: 5.25rem !important;
+  }
 }
 
 @media (max-width: 1023px) and (orientation: landscape) {
