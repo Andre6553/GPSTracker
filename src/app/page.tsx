@@ -413,7 +413,12 @@ export default function Dashboard() {
       setIsLoadingHistory(true);
       const pageSize = 1000;
       const maxRows = 50000;
-      const hasRange = !!(startDate || endDate);
+      // Live tab: default trail window = today (midnight → midnight).
+      // History tab: user-specified date range (or blank = "recent", if they leave it blank).
+      const todayYmd = format(new Date(), "yyyy-MM-dd");
+      const effectiveStartDate = activeTab === "live" && !startDate && !endDate ? todayYmd : startDate;
+      const effectiveEndDate = activeTab === "live" && !startDate && !endDate ? todayYmd : endDate;
+      const hasRange = !!(effectiveStartDate || effectiveEndDate);
       const all: TelemetryPoint[] = [];
 
       for (let offset = 0; offset < maxRows; offset += pageSize) {
@@ -426,8 +431,8 @@ export default function Dashboard() {
           .order("created_at", { ascending: hasRange })
           .range(offset, offset + pageSize - 1);
 
-        if (startDate) q = q.gte("created_at", `${startDate}T00:00:00+02:00`);
-        if (endDate) q = q.lte("created_at", `${endDate}T23:59:59+02:00`);
+        if (effectiveStartDate) q = q.gte("created_at", `${effectiveStartDate}T00:00:00+02:00`);
+        if (effectiveEndDate) q = q.lte("created_at", `${effectiveEndDate}T23:59:59+02:00`);
 
         const { data, error } = await q;
         if (error) {
@@ -454,7 +459,11 @@ export default function Dashboard() {
       const sorted = all
         .slice()
         .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-      console.log(`FETCHED HISTORY: ${sorted.length} records for ${selectedDeviceId} (${hasRange ? "date range" : "recent"})`);
+      console.log(
+        `FETCHED HISTORY: ${sorted.length} records for ${selectedDeviceId} (${
+          hasRange ? `${effectiveStartDate || "…"} → ${effectiveEndDate || "…"}${activeTab === "live" && !startDate && !endDate ? " (live: today)" : ""}` : "recent"
+        })`
+      );
       setSelectedHistory(sorted);
       setIsLoadingHistory(false);
     }
@@ -463,7 +472,7 @@ export default function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [selectedDeviceId, startDate, endDate]);
+  }, [selectedDeviceId, startDate, endDate, activeTab]);
 
   // Load Geofences
   useEffect(() => {
