@@ -1231,8 +1231,8 @@ export default function Dashboard() {
       <div className={`flex-1 p-2 lg:p-4 relative h-full ${isDarkMode ? 'bg-slate-950' : 'bg-slate-200'}`}>
         
         {/* Floating Search Bar */}
-        <div className="mobile-search-safe absolute top-6 left-1/2 -translate-x-1/2 z-[1000] w-full max-w-md px-4">
-          <div className="relative group">
+        <div className="mobile-search-safe pointer-events-none absolute top-6 left-1/2 -translate-x-1/2 z-20 lg:z-[1000] w-full max-w-md px-4">
+          <div className="relative group pointer-events-auto">
             <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none">
               <Search className="w-4 h-4 text-slate-400 group-focus-within:text-blue-500 transition-colors" />
             </div>
