@@ -758,6 +758,13 @@ export default function Dashboard() {
               <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">Fleet Tracker</h1>
             </div>
             <div className="flex gap-1.5">
+              <button
+                onClick={() => setIsSidebarOpen(false)}
+                className="lg:hidden p-2 rounded-full bg-slate-800 text-slate-300 hover:text-white"
+                aria-label="Close menu"
+              >
+                <X className="w-4 h-4" />
+              </button>
               <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 rounded-full bg-slate-800 text-slate-400 hover:text-blue-400"><Sun className="w-4 h-4" /></button>
               <button onClick={exportCSV} className="p-2 rounded-full bg-slate-800 text-slate-400 hover:text-emerald-400"><Download className="w-4 h-4" /></button>
               <button onClick={handleSignOut} className="p-2 rounded-full bg-slate-800 text-slate-400 hover:text-red-400"><LogOut className="w-4 h-4" /></button>
