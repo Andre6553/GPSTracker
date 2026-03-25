@@ -1,0 +1,16 @@
+---
+description: Golden rule — mirror CarTracker.ino to Arduino IDE path after any firmware edit
+alwaysApply: true
+---
+
+# Firmware mirror (mandatory)
+
+Whenever you change **any** firmware under `esp32-firmware/` (especially `CarTracker.ino`), you **must** in the **same change** copy the final sketch to the path the user uploads from Arduino IDE:
+
+`C:\Users\User\OneDrive\Documents\Arduino\Car Tracker\CarTracker\CarTracker.ino`
+
+Treat this as **non-optional**: do not finish the task until both files match.
+
+If you update the first-line version stamp (`//verX.Y M/D/YYYY HH:MM`), update it in **both** `esp32-firmware/CarTracker.ino` and the OneDrive `CarTracker.ino`.
+
+Do **not** overwrite the user’s local `secrets.h` in the Arduino folder unless they explicitly ask.

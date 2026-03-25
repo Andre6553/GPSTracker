@@ -9,7 +9,7 @@ import {
   Search, Navigation, Gauge, TrendingUp, MapPin, Map as LucideMap,
   Fuel, Tag, AlertTriangle, Zap, Menu, X, Filter, Download, RotateCcw,
   Sun, Moon, Calendar, Play, Pause, SkipForward, Clock, Plus, Route,
-  Lock, Unlock
+  Lock, Unlock, CircleStop
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import SpeedChart from "@/components/SpeedChart";
@@ -97,6 +97,113 @@ function cleanGPSPoints(points: TelemetryPoint[]): TelemetryPoint[] {
   return result;
 }
 
+/** True if the string looks like "num, num" for coordinate entry (skips noisy geocoding). */
+function looksLikeCoordinatePair(raw: string): boolean {
+  return /^-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?$/.test(raw.trim());
+}
+
+/**
+ * Parse "lat, lon" or unambiguous "lng, lat" from search box → Mapbox [lng, lat].
+ * When both numbers are within lat range, assumes latitude first (common user style).
+ */
+function parseCoordinateQuery(raw: string): [number, number] | null {
+  const m = raw.trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+  if (!m) return null;
+  const a = parseFloat(m[1]);
+  const b = parseFloat(m[2]);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  if (a < -180 || a > 180 || b < -180 || b > 180) return null;
+
+  const absA = Math.abs(a);
+  const absB = Math.abs(b);
+
+  if (absA > 90 && absB <= 90) return [a, b];
+  if (absB > 90 && absA <= 90) return [b, a];
+  if (absA > 90 && absB > 90) return null;
+
+  return [b, a];
+}
+
+/** Posted limit at or above this (km/h) is treated as highway/motorway-style for ETA offsets. */
+const ETA_HIGHWAY_POSTED_MIN_KMH = 90;
+
+function maxspeedAnnotationToKmh(m: unknown): { postedKmh: number | null; unlimited: boolean } {
+  if (!m || typeof m !== "object") return { postedKmh: null, unlimited: false };
+  const o = m as Record<string, unknown>;
+  if (o.none === true) return { postedKmh: null, unlimited: true };
+  if (o.unknown === true) return { postedKmh: null, unlimited: false };
+  const sp = o.speed;
+  if (typeof sp !== "number" || !Number.isFinite(sp)) return { postedKmh: null, unlimited: false };
+  const unit = o.unit;
+  if (unit === "mph") return { postedKmh: sp * 1.609344, unlimited: false };
+  return { postedKmh: sp, unlimited: false };
+}
+
+function segmentImpliedKmh(distanceM: number, durationSec: number): number {
+  if (durationSec < 0.2) return 40;
+  return (distanceM / durationSec) * 3.6;
+}
+
+/**
+ * Sum per-segment time using posted limit + user offsets (highway vs town).
+ * Falls back to null if annotations are missing so caller can use raw Mapbox duration.
+ */
+function personalizedRouteDurationSec(
+  route: { legs?: unknown[] },
+  highwayOverKmh: number,
+  urbanOverKmh: number
+): number | null {
+  const legs = route.legs;
+  if (!Array.isArray(legs) || legs.length === 0) return null;
+  let totalSec = 0;
+  let anySegment = false;
+  for (const leg of legs) {
+    if (!leg || typeof leg !== "object") return null;
+    const ann = (leg as { annotation?: Record<string, unknown> }).annotation;
+    if (!ann) return null;
+    const dists = ann.distance as number[] | undefined;
+    const durs = ann.duration as number[] | undefined;
+    const maxs = ann.maxspeed as unknown[] | undefined;
+    if (!Array.isArray(dists) || !Array.isArray(durs) || dists.length !== durs.length) return null;
+    const n = dists.length;
+    for (let i = 0; i < n; i++) {
+      const d = dists[i];
+      const durMapbox = durs[i];
+      if (typeof d !== "number" || d <= 0 || typeof durMapbox !== "number" || durMapbox <= 0) return null;
+      const ms = maxs && i < maxs.length ? maxs[i] : null;
+      const { postedKmh, unlimited } = maxspeedAnnotationToKmh(ms);
+      const implied = segmentImpliedKmh(d, durMapbox);
+      let posted: number;
+      let isHighway: boolean;
+      if (unlimited) {
+        posted = Math.max(130, implied);
+        isHighway = true;
+      } else if (postedKmh == null) {
+        posted = implied;
+        isHighway = implied >= ETA_HIGHWAY_POSTED_MIN_KMH;
+      } else {
+        posted = postedKmh;
+        isHighway = postedKmh >= ETA_HIGHWAY_POSTED_MIN_KMH;
+      }
+      const over = Math.max(0, isHighway ? highwayOverKmh : urbanOverKmh);
+      const effectiveKmh = Math.max(25, posted + over);
+      totalSec += (d * 3.6) / effectiveKmh;
+      anySegment = true;
+    }
+  }
+  return anySegment ? totalSec : null;
+}
+
+/** Mapbox route row + drive time in seconds (after speed-limit adjustment). */
+interface RouteEtaInfo {
+  distance: string;
+  duration: string;
+  arrivalTime: string;
+  summary: string;
+  routeLine: [number, number][];
+  durationSec: number;
+}
+
 export default function Dashboard() {
   const [allData, setAllData] = useState<TelemetryPoint[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
@@ -105,21 +212,33 @@ export default function Dashboard() {
   const [deviceConfigs, setDeviceConfigs] = useState<Record<string, { speed_limit: number, fuel_rate: number, fuel_type: string }>>({});
 
   const [destination, setDestination] = useState("");
-  const [etaInfo, setEtaInfo] = useState<{ distance: string; duration: string; arrivalTime: string; summary: string; routeLine: [number, number][] } | null>(null);
+  const [etaInfo, setEtaInfo] = useState<RouteEtaInfo | null>(null);
   const [isRouting, setIsRouting] = useState(false);
   const [suggestions, setSuggestions] = useState<{ place_name: string; center: [number, number] }[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [selectedCoords, setSelectedCoords] = useState<[number, number] | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [alternativeRoutes, setAlternativeRoutes] = useState<{ 
-    distance: string; duration: string; arrivalTime: string; summary: string; routeLine: [number, number][] 
-  }[]>([]);
+  const [alternativeRoutes, setAlternativeRoutes] = useState<RouteEtaInfo[]>([]);
   const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
+
+  /** After user taps Go: live panel + traveled km; ETA from Mapbox time scaled by distance left. */
+  const [isGoNavigationActive, setIsGoNavigationActive] = useState(false);
+  const [navTraveledKm, setNavTraveledKm] = useState(0);
+  const navTripLastRef = useRef<{ lat: number; lon: number } | null>(null);
+  /** At Go: Mapbox road km, straight km, and drive time — scale remaining → ETA (avoids bogus GPS crawl speed). */
+  const [goNavBaseline, setGoNavBaseline] = useState<{
+    roadKm: number;
+    straightKm: number;
+    mapboxDurationSec: number;
+  } | null>(null);
 
   const [isDarkMode, setIsDarkMode] = useState(true);
 
   // Speed Alert
   const [speedLimit, setSpeedLimit] = useState(120);
+  /** Personalized ETA: km/h over posted limit (Mapbox); segments with limit ≥ ~90 km/h use highway value. */
+  const [etaHighwayOverKmh, setEtaHighwayOverKmh] = useState(20);
+  const [etaUrbanOverKmh, setEtaUrbanOverKmh] = useState(10);
   const [speedAlerts, setSpeedAlerts] = useState<{ time: string; speed: number; lat: number; lon: number }[]>([]);
   const [speedAlertsEnabled, setSpeedAlertsEnabled] = useState(true);
   const [geofenceAlertsEnabled, setGeofenceAlertsEnabled] = useState(true);
@@ -128,6 +247,14 @@ export default function Dashboard() {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [selectedHistory, setSelectedHistory] = useState<TelemetryPoint[]>([]);
+  const [historySyncNonce, setHistorySyncNonce] = useState(0);
+  const historyBackfillResyncRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (historyBackfillResyncRef.current) clearTimeout(historyBackfillResyncRef.current);
+    },
+    []
+  );
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
@@ -239,6 +366,12 @@ export default function Dashboard() {
           setGeofenceAlertsEnabled(settings.geofence_alerts_enabled !== false);
           if (settings.fuel_cost) setFuelCost(settings.fuel_cost);
           if (settings.telegram_chat_id) setTelegramId(String(settings.telegram_chat_id));
+          if (settings.eta_highway_over_limit_kmh != null && Number.isFinite(Number(settings.eta_highway_over_limit_kmh))) {
+            setEtaHighwayOverKmh(Number(settings.eta_highway_over_limit_kmh));
+          }
+          if (settings.eta_urban_over_limit_kmh != null && Number.isFinite(Number(settings.eta_urban_over_limit_kmh))) {
+            setEtaUrbanOverKmh(Number(settings.eta_urban_over_limit_kmh));
+          }
           lastSavedSettings.current = settings;
         }
         
@@ -256,7 +389,9 @@ export default function Dashboard() {
         fuelCost === lastSavedSettings.current.fuel_cost &&
         telegramId === (lastSavedSettings.current.telegram_chat_id || "") &&
         speedAlertsEnabled === (lastSavedSettings.current.speed_alerts_enabled !== false) &&
-        geofenceAlertsEnabled === (lastSavedSettings.current.geofence_alerts_enabled !== false)) {
+        geofenceAlertsEnabled === (lastSavedSettings.current.geofence_alerts_enabled !== false) &&
+        etaHighwayOverKmh === Number(lastSavedSettings.current.eta_highway_over_limit_kmh ?? 20) &&
+        etaUrbanOverKmh === Number(lastSavedSettings.current.eta_urban_over_limit_kmh ?? 10)) {
       return;
     }
 
@@ -268,7 +403,9 @@ export default function Dashboard() {
           fuel_cost: fuelCost,
           telegram_chat_id: telegramId,
           speed_alerts_enabled: speedAlertsEnabled,
-          geofence_alerts_enabled: geofenceAlertsEnabled
+          geofence_alerts_enabled: geofenceAlertsEnabled,
+          eta_highway_over_limit_kmh: etaHighwayOverKmh,
+          eta_urban_over_limit_kmh: etaUrbanOverKmh,
         }, { onConflict: 'user_id' })
         .select()
         .single();
@@ -281,7 +418,7 @@ export default function Dashboard() {
     }, 2000); // 2s debounce
 
     return () => clearTimeout(timer);
-  }, [fuelCost, telegramId, speedAlertsEnabled, geofenceAlertsEnabled, session, authChecked]);
+  }, [fuelCost, telegramId, speedAlertsEnabled, geofenceAlertsEnabled, etaHighwayOverKmh, etaUrbanOverKmh, session, authChecked]);
 
   // PERSISTENCE: Save Device Configs (Speed, Fuel Rate)
   useEffect(() => {
@@ -385,15 +522,30 @@ export default function Dashboard() {
               const last = prev[prev.length - 1];
               // 1. Skip if it's stationary jitter
               if (isJitter(last || null, newData)) return prev;
-              
-              // 2. Prevent exact duplicate timestamps (avoiding database double-inserts)
-              if (prev.some(p => p.created_at === newData.created_at)) return prev;
 
-              // 3. Add and Sort chronologically (ensures smooth path even if sync arrives out of order)
-              const combined = [...prev, newData].sort((a, b) => 
-                new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+              // 2. Prevent exact duplicate timestamps (avoiding database double-inserts)
+              if (prev.some((p) => p.created_at === newData.created_at)) return prev;
+
+              const newMs = new Date(newData.created_at).getTime();
+              const prevMaxMs = prev.reduce(
+                (m, p) => Math.max(m, new Date(p.created_at).getTime()),
+                0
               );
-              
+              // Buffered points from the device use GPS time and often arrive AFTER newer live rows —
+              // reload full history from Supabase so the trail gets every intermediate fix (no long chord).
+              if (prev.length > 0 && newMs < prevMaxMs - 10_000) {
+                if (historyBackfillResyncRef.current) clearTimeout(historyBackfillResyncRef.current);
+                historyBackfillResyncRef.current = setTimeout(() => {
+                  historyBackfillResyncRef.current = null;
+                  setHistorySyncNonce((n) => n + 1);
+                }, 900);
+              }
+
+              // 3. Merge and sort chronologically (smooth path when out-of-order inserts stream in)
+              const combined = [...prev, newData].sort(
+                (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+              );
+
               return combined.slice(-25000);
             });
           }
@@ -472,7 +624,7 @@ export default function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [selectedDeviceId, startDate, endDate, activeTab]);
+  }, [selectedDeviceId, startDate, endDate, activeTab, historySyncNonce]);
 
   // Load Geofences
   useEffect(() => {
@@ -527,55 +679,232 @@ export default function Dashboard() {
     }
   };
 
-  const currentPnt = selectedHistory.length > 0 ? selectedHistory[selectedHistory.length - 1] : null;
+  /** Map click: route to point, or place geofence when in geofence mode (trail popups still take precedence in Map.tsx). */
+  const handleMapDestinationClick = useCallback(
+    (lat: number, lon: number) => {
+      if (isAddingGeofence) {
+        setNewGeofencePos({ lat, lon });
+        return;
+      }
+      setSelectedCoords([lon, lat]);
+      setDestination(`${lat.toFixed(6)}, ${lon.toFixed(6)}`);
+      setShowSuggestions(false);
+      setSuggestions([]);
+    },
+    [isAddingGeofence]
+  );
 
-  // Update ETA and Route when destination or selected car changes
+  const fleetLatest = allData;
+
+  const currentPnt = useMemo(() => {
+    if (selectedHistory.length > 0) return selectedHistory[selectedHistory.length - 1];
+    if (selectedDeviceId) {
+      const live = fleetLatest.find((p) => p.device_id === selectedDeviceId);
+      if (live) return live;
+    }
+    return null;
+  }, [selectedHistory, selectedDeviceId, fleetLatest]);
+
+  /** Throttles Mapbox Directions when only the vehicle moves (saves quota). */
+  const routeThrottleRef = useRef<{
+    destKey: string;
+    lastFetchMs: number;
+    lastLat: number;
+    lastLon: number;
+  } | null>(null);
+
+  const ROUTE_REFETCH_MIN_MS = 120_000;
+  const ROUTE_REFETCH_MIN_MOVE_KM = 1.2;
+
+  // Update ETA and Route: always on dest/profile change; on GPS move only if enough time/distance (Mapbox quota).
   useEffect(() => {
     if (!selectedCoords || !currentPnt) {
       setAlternativeRoutes([]);
       setEtaInfo(null);
+      routeThrottleRef.current = null;
       return;
     }
+
+    const destKey = `${selectedCoords[0].toFixed(5)},${selectedCoords[1].toFixed(5)}|${selectedRouteIndex}|${speedLimit}|h${etaHighwayOverKmh}|u${etaUrbanOverKmh}`;
+    const throttle = routeThrottleRef.current;
+    const destOrProfileChanged = !throttle || throttle.destKey !== destKey;
+
+    if (!destOrProfileChanged && throttle) {
+      const dt = Date.now() - throttle.lastFetchMs;
+      const movedKm = haversineKm(throttle.lastLat, throttle.lastLon, currentPnt.lat, currentPnt.lon);
+      if (dt < ROUTE_REFETCH_MIN_MS && movedKm < ROUTE_REFETCH_MIN_MOVE_KM) {
+        return;
+      }
+    }
+
+    let cancelled = false;
 
     async function getRoute() {
       if (!selectedCoords || !currentPnt) return;
       setIsRouting(true);
       try {
         const query = await fetch(
-          `https://api.mapbox.com/directions/v5/mapbox/driving/${currentPnt.lon},${currentPnt.lat};${selectedCoords[0]},${selectedCoords[1]}?alternatives=true&geometries=geojson&access_token=${mapboxgl.accessToken}`
+          `https://api.mapbox.com/directions/v5/mapbox/driving/${currentPnt.lon},${currentPnt.lat};${selectedCoords[0]},${selectedCoords[1]}?alternatives=true&geometries=geojson&overview=full&annotations=distance,duration,maxspeed&access_token=${mapboxgl.accessToken}`
         );
         const json = await query.json();
+        if (cancelled) return;
+        if (json.code && json.code !== "Ok") {
+          console.warn("Directions API:", json.code, json.message);
+        }
         if (json.routes && json.routes.length > 0) {
-          // Calculate a scaling factor: base 120km/h / user's speedLimit
-          // e.g. if limit is 150, factor is 0.8 (20% faster)
           const speedFactor = 120 / (speedLimit || 120);
-          
-          const routes = json.routes.map((r: any) => {
-            const adjustedSec = r.duration * speedFactor;
+
+          const routes: RouteEtaInfo[] = json.routes.map((r: any) => {
+            const personalized = personalizedRouteDurationSec(r, etaHighwayOverKmh, etaUrbanOverKmh);
+            const adjustedSecRaw =
+              personalized != null && Number.isFinite(personalized) && personalized > 5
+                ? personalized
+                : r.duration * speedFactor;
+            const adjustedSec = Math.min(adjustedSecRaw, 48 * 3600);
             return {
               distance: (r.distance / 1000).toFixed(1) + " km",
-              duration: adjustedSec > 3600 
-                ? `${Math.floor(adjustedSec / 3600)}h ${Math.round((adjustedSec % 3600) / 60)}m` 
-                : `${Math.round(adjustedSec / 60)} min`,
+              duration:
+                adjustedSec > 3600
+                  ? `${Math.floor(adjustedSec / 3600)}h ${Math.round((adjustedSec % 3600) / 60)}m`
+                  : `${Math.round(adjustedSec / 60)} min`,
               arrivalTime: format(new Date(Date.now() + adjustedSec * 1000), "HH:mm"),
               summary: r.summary || "Route",
               routeLine: r.geometry.coordinates.map((c: any) => [c[1], c[0]]) as [number, number][],
+              durationSec: adjustedSec,
             };
           });
           setAlternativeRoutes(routes);
           setEtaInfo(routes[selectedRouteIndex] || routes[0]);
+          routeThrottleRef.current = {
+            destKey,
+            lastFetchMs: Date.now(),
+            lastLat: currentPnt.lat,
+            lastLon: currentPnt.lon,
+          };
         }
       } catch (e) {
         console.error("Route error:", e);
       } finally {
-        setIsRouting(false);
+        if (!cancelled) setIsRouting(false);
       }
     }
-    getRoute();
-  }, [selectedCoords, currentPnt, selectedRouteIndex]);
+
+    void getRoute();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCoords, currentPnt, selectedRouteIndex, speedLimit, etaHighwayOverKmh, etaUrbanOverKmh]);
+
+  /** Dropping the route clears Go mode and live stats. */
+  useEffect(() => {
+    if (!selectedCoords) {
+      setIsGoNavigationActive(false);
+      setNavTraveledKm(0);
+      navTripLastRef.current = null;
+      setGoNavBaseline(null);
+    }
+  }, [selectedCoords]);
+
+  /** Km traveled since Go (GPS segments, same sanity cap as trip stats; from Supabase updates). */
+  useEffect(() => {
+    if (!isGoNavigationActive || !currentPnt) return;
+    const prev = navTripLastRef.current;
+    if (prev) {
+      const d = haversineKm(prev.lat, prev.lon, currentPnt.lat, currentPnt.lon);
+      if (d > 0.0005 && d < 2) setNavTraveledKm((x) => x + d);
+    }
+    navTripLastRef.current = { lat: currentPnt.lat, lon: currentPnt.lon };
+  }, [currentPnt?.lat, currentPnt?.lon, currentPnt?.created_at, isGoNavigationActive, currentPnt]);
+
+  const straightLineRemainingKm = useMemo(() => {
+    if (!currentPnt || !selectedCoords) return null;
+    return haversineKm(currentPnt.lat, currentPnt.lon, selectedCoords[1], selectedCoords[0]);
+  }, [currentPnt, selectedCoords]);
+
+  /** Live nav: approx road km from geometry; ETA/arrival from Mapbox duration × (remaining / start), not GPS speed. */
+  const telemetryNavLive = useMemo(() => {
+    if (!isGoNavigationActive || !currentPnt || !selectedCoords || !goNavBaseline || straightLineRemainingKm == null) {
+      return null;
+    }
+    const straight = straightLineRemainingKm;
+    const ratio =
+      goNavBaseline.straightKm > 0.001
+        ? Math.min(2.8, Math.max(1, goNavBaseline.roadKm / goNavBaseline.straightKm))
+        : 1;
+    const approxRoadKm = Math.max(straight * 0.95, straight * ratio);
+
+    const baseDur = goNavBaseline.mapboxDurationSec;
+    const baseRoad = goNavBaseline.roadKm;
+    let estSec: number;
+    let etaSource: "route" | "gps";
+
+    if (baseDur > 2 && baseRoad > 0.001) {
+      const frac = Math.min(1.35, Math.max(0, approxRoadKm / baseRoad));
+      estSec = Math.min(baseDur * frac, 48 * 3600);
+      etaSource = "route";
+    } else {
+      const rawKmh = Math.max(0, Number(currentPnt.speed_kmh) || 0);
+      const STATIONARY_MAX_KMH = 1;
+      if (rawKmh < STATIONARY_MAX_KMH) {
+        return {
+          approxRoadKm,
+          durationLabel: "—",
+          arrivalTime: "—",
+          straightKm: straight,
+          etaSource: "gps" as const,
+          isStationaryEta: true as const,
+        };
+      }
+      estSec = Math.min((approxRoadKm / rawKmh) * 3600, 48 * 3600);
+      etaSource = "gps";
+    }
+
+    const durationLabel =
+      estSec > 3600
+        ? `${Math.floor(estSec / 3600)}h ${Math.round((estSec % 3600) / 60)}m`
+        : `${Math.max(1, Math.round(estSec / 60))} min`;
+    const arrivalTime = format(new Date(Date.now() + estSec * 1000), "HH:mm");
+    return {
+      approxRoadKm,
+      durationLabel,
+      arrivalTime,
+      straightKm: straight,
+      etaSource,
+      isStationaryEta: false as const,
+    };
+  }, [isGoNavigationActive, currentPnt, selectedCoords, goNavBaseline, straightLineRemainingKm]);
+
+  const clearRouteAndNavigation = useCallback(() => {
+    setIsGoNavigationActive(false);
+    setNavTraveledKm(0);
+    navTripLastRef.current = null;
+    setGoNavBaseline(null);
+    setSelectedCoords(null);
+    setDestination("");
+    setAlternativeRoutes([]);
+    setEtaInfo(null);
+  }, []);
+
+  const startGoNavigation = useCallback(() => {
+    if (!currentPnt || !selectedCoords || !etaInfo) return;
+    setNavTraveledKm(0);
+    navTripLastRef.current = { lat: currentPnt.lat, lon: currentPnt.lon };
+    const straight0 = haversineKm(
+      currentPnt.lat,
+      currentPnt.lon,
+      selectedCoords[1],
+      selectedCoords[0]
+    );
+    const road0 = parseFloat(String(etaInfo.distance).replace(/[^\d.-]/g, "")) || 0;
+    setGoNavBaseline({
+      roadKm: Math.max(road0, 0.01),
+      straightKm: Math.max(straight0, 0.001),
+      mapboxDurationSec: Math.max(0, Number(etaInfo.durationSec) || 0),
+    });
+    setIsGoNavigationActive(true);
+  }, [currentPnt, selectedCoords, etaInfo]);
 
   const activeDevices = assignedDevices;
-  const fleetLatest = allData;
 
   // Stats Calculations
   const totalDistanceKm = useMemo(() => {
@@ -956,7 +1285,7 @@ export default function Dashboard() {
                        <h3 className="text-[10px] font-black text-emerald-400 uppercase tracking-widest flex items-center gap-2">
                          <Route className="w-3.5 h-3.5" /> Active Route
                        </h3>
-                       <button onClick={() => { setSelectedCoords(null); setDestination(""); setAlternativeRoutes([]); setEtaInfo(null); }} className="text-[10px] text-emerald-500 hover:text-white font-bold uppercase transition-colors">Clear</button>
+                       <button onClick={clearRouteAndNavigation} className="text-[10px] text-emerald-500 hover:text-white font-bold uppercase transition-colors">Clear</button>
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
@@ -1024,6 +1353,42 @@ export default function Dashboard() {
                     <div className="flex flex-col gap-1.5 col-span-2">
                       <span className="text-[9px] text-slate-500 uppercase font-bold">Consumption (km/L)</span>
                       <input type="number" value={fuelRate} onChange={e => setFuelRate(Number(e.target.value))} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white" />
+                    </div>
+                    <div className="flex flex-col gap-1.5 col-span-2 border-t border-slate-700/80 pt-3 mt-1">
+                      <span className="text-[9px] text-slate-500 uppercase font-bold text-emerald-500/90">
+                        ETA driving style (posted limit +)
+                      </span>
+                      <p className="text-[9px] text-slate-500 leading-snug">
+                        Mapbox speed limits: segments ≥ ~90 km/h use the first value; lower limits use the second. Example: +20 highway / +10 town.
+                      </p>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="flex flex-col gap-1">
+                          <span className="text-[9px] text-slate-500 uppercase font-bold">Highway + km/h</span>
+                          <div className="flex items-center bg-slate-900 border border-slate-700 rounded-lg px-2 py-1">
+                            <input
+                              type="number"
+                              min={0}
+                              max={80}
+                              value={etaHighwayOverKmh}
+                              onChange={(e) => setEtaHighwayOverKmh(Math.max(0, Number(e.target.value) || 0))}
+                              className="w-full bg-transparent text-xs text-white focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <span className="text-[9px] text-slate-500 uppercase font-bold">Town + km/h</span>
+                          <div className="flex items-center bg-slate-900 border border-slate-700 rounded-lg px-2 py-1">
+                            <input
+                              type="number"
+                              min={0}
+                              max={60}
+                              value={etaUrbanOverKmh}
+                              onChange={(e) => setEtaUrbanOverKmh(Math.max(0, Number(e.target.value) || 0))}
+                              className="w-full bg-transparent text-xs text-white focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1245,19 +1610,64 @@ export default function Dashboard() {
             </div>
             <input
               type="text"
-              placeholder="Search destination or address..."
+              placeholder="Search address or lat, lon (e.g. -29.098618, 26.164902)..."
               value={destination}
               onChange={(e) => {
-                setDestination(e.target.value);
+                const val = e.target.value;
+                setDestination(val);
                 if (debounceRef.current) clearTimeout(debounceRef.current);
+                if (val.length <= 2) {
+                  setSuggestions([]);
+                  setShowSuggestions(false);
+                  return;
+                }
+                if (looksLikeCoordinatePair(val)) {
+                  setSuggestions([]);
+                  setShowSuggestions(false);
+                  return;
+                }
                 debounceRef.current = setTimeout(async () => {
-                  if (e.target.value.length > 2) {
-                    const res = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(e.target.value)}.json?access_token=${mapboxgl.accessToken}&limit=5`);
+                  try {
+                    const token = mapboxgl.accessToken;
+                    const origin = fleetLatest.find((p) => p.device_id === selectedDeviceId);
+                    const prox =
+                      origin != null ? `&proximity=${origin.lon},${origin.lat}` : "";
+                    const res = await fetch(
+                      `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(val)}.json?autocomplete=true&limit=5${prox}&access_token=${token}`
+                    );
                     const data = await res.json();
-                    setSuggestions(data.features || []);
-                    setShowSuggestions(true);
+                    const feats = data.features || [];
+                    setSuggestions(
+                      feats.map((f: { place_name?: string; center?: [number, number] }) => ({
+                        place_name: f.place_name ?? "",
+                        center: f.center as [number, number],
+                      }))
+                    );
+                    setShowSuggestions(feats.length > 0);
+                  } catch {
+                    setSuggestions([]);
+                    setShowSuggestions(false);
                   }
                 }, 500);
+              }}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return;
+                const trimmed = destination.trim();
+                const coords = parseCoordinateQuery(trimmed);
+                if (coords) {
+                  setSelectedCoords(coords);
+                  setDestination(`${coords[1].toFixed(6)}, ${coords[0].toFixed(6)}`);
+                  setShowSuggestions(false);
+                  setSuggestions([]);
+                  return;
+                }
+                if (suggestions.length > 0) {
+                  const top = suggestions[0];
+                  setDestination(top.place_name);
+                  setSelectedCoords(top.center);
+                  setShowSuggestions(false);
+                  setSuggestions([]);
+                }
               }}
               className="w-full bg-slate-900/90 backdrop-blur-md border border-slate-700/50 rounded-2xl pl-11 pr-4 py-3.5 text-sm text-white shadow-2xl shadow-black/50 focus:outline-none focus:border-blue-500/50 transition-all"
             />
@@ -1283,6 +1693,126 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* Go — shown when a route exists and live nav is not running */}
+        {selectedCoords &&
+          etaInfo &&
+          currentPnt &&
+          !isGoNavigationActive &&
+          !isRouting && (
+            <div className="pointer-events-none absolute top-[5.25rem] sm:top-24 left-1/2 -translate-x-1/2 z-[999] flex justify-center px-4 w-full max-w-md">
+              <button
+                type="button"
+                onClick={startGoNavigation}
+                className="pointer-events-auto flex items-center gap-2 rounded-full bg-emerald-600 px-6 py-3 text-sm font-black uppercase tracking-wide text-white shadow-xl shadow-emerald-900/40 transition hover:bg-emerald-500 active:scale-[0.98]"
+              >
+                <Play className="h-5 w-5 fill-current" />
+                Go
+              </button>
+            </div>
+          )}
+
+        {/* Live navigation telemetry — left of map */}
+        {isGoNavigationActive && currentPnt && selectedCoords && etaInfo && (
+          <div
+            className={`absolute left-2 right-auto top-[4.5rem] sm:top-24 z-[998] w-[min(18.5rem,calc(100vw-3rem))] max-h-[min(70vh,calc(100%-8rem))] overflow-y-auto rounded-2xl border p-4 shadow-2xl ${
+              isDarkMode
+                ? "border-emerald-500/40 bg-slate-950/95 text-white backdrop-blur-md"
+                : "border-emerald-600/50 bg-white/95 text-slate-900 backdrop-blur-md"
+            }`}
+          >
+            <p className={`mb-2 text-[9px] leading-snug ${isDarkMode ? "text-slate-500" : "text-slate-600"}`}>
+              ETA and arrival use your personalized route time (posted limits + highway/town offsets from Trip defaults), scaled by road distance left — not raw GPS speed.
+            </p>
+            <div className="mb-3 flex items-center justify-between gap-2 border-b border-emerald-500/30 pb-2">
+              <h3 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-emerald-400">
+                <Navigation className="h-4 w-4" />
+                Navigation
+              </h3>
+              <button
+                type="button"
+                onClick={clearRouteAndNavigation}
+                className="flex items-center gap-1.5 rounded-lg bg-red-600/90 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-white transition hover:bg-red-500"
+              >
+                <CircleStop className="h-3.5 w-3.5" />
+                Stop
+              </button>
+            </div>
+
+            <dl className="flex flex-col gap-3 text-xs">
+              <div>
+                <dt className={isDarkMode ? "text-[10px] font-bold uppercase text-slate-500" : "text-[10px] font-bold uppercase text-slate-600"}>
+                  ETA (route profile × distance left)
+                </dt>
+                <dd className="mt-0.5 text-lg font-black tabular-nums">
+                  {telemetryNavLive?.durationLabel ?? etaInfo.duration}
+                </dd>
+                {telemetryNavLive?.etaSource === "gps" && !telemetryNavLive.isStationaryEta ? (
+                  <p className={`mt-1 text-[9px] leading-snug ${isDarkMode ? "text-amber-200/80" : "text-amber-800"}`}>
+                    From GPS speed — route time was unavailable; typical roads usually faster than this.
+                  </p>
+                ) : null}
+                {telemetryNavLive?.isStationaryEta ? (
+                  <p className={`mt-1 text-[9px] leading-snug ${isDarkMode ? "text-slate-500" : "text-slate-600"}`}>
+                    ETA hidden: speed under ~1 km/h and no usable route timer — parked or very noisy GPS.
+                  </p>
+                ) : null}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <dt className={isDarkMode ? "text-[10px] font-bold uppercase text-slate-500" : "text-[10px] font-bold uppercase text-slate-600"}>
+                    Arrival (est.)
+                  </dt>
+                  <dd className="mt-0.5 font-bold tabular-nums">{telemetryNavLive?.arrivalTime ?? etaInfo.arrivalTime}</dd>
+                </div>
+                <div>
+                  <dt className={isDarkMode ? "text-[10px] font-bold uppercase text-slate-500" : "text-[10px] font-bold uppercase text-slate-600"}>
+                    Dest. (~road km)
+                  </dt>
+                  <dd className="mt-0.5 font-bold tabular-nums">
+                    {telemetryNavLive != null
+                      ? `${telemetryNavLive.approxRoadKm.toFixed(1)} km`
+                      : etaInfo.distance}
+                  </dd>
+                </div>
+              </div>
+              <div>
+                <dt className={isDarkMode ? "text-[10px] font-bold uppercase text-slate-500" : "text-[10px] font-bold uppercase text-slate-600"}>
+                  Straight-line to dest.
+                </dt>
+                <dd className="mt-0.5 font-bold tabular-nums">
+                  {straightLineRemainingKm != null ? `${straightLineRemainingKm.toFixed(2)} km` : "—"}
+                </dd>
+              </div>
+              <div>
+                <dt className={isDarkMode ? "text-[10px] font-bold uppercase text-slate-500" : "text-[10px] font-bold uppercase text-slate-600"}>
+                  Km traveled (this run)
+                </dt>
+                <dd className="mt-0.5 text-lg font-black tabular-nums text-emerald-400">{navTraveledKm.toFixed(2)} km</dd>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <dt className={isDarkMode ? "text-[10px] font-bold uppercase text-slate-500" : "text-[10px] font-bold uppercase text-slate-600"}>
+                    Speed
+                  </dt>
+                  <dd className="mt-0.5 font-bold tabular-nums">
+                    {(Number(currentPnt.speed_kmh) || 0).toFixed(1)} km/h
+                  </dd>
+                </div>
+              </div>
+              <div>
+                <dt className={isDarkMode ? "text-[10px] font-bold uppercase text-slate-500" : "text-[10px] font-bold uppercase text-slate-600"}>
+                  Current position
+                </dt>
+                <dd className={`mt-1 font-mono text-[11px] leading-relaxed ${isDarkMode ? "text-slate-300" : "text-slate-700"}`}>
+                  lat {currentPnt.lat.toFixed(6)}
+                  <br />
+                  lon {currentPnt.lon.toFixed(6)}
+                </dd>
+              </div>
+            </dl>
+          </div>
+        )}
+
         <LiveMap
           fleetLatest={fleetLatest}
           selectedDeviceId={selectedDeviceId}
@@ -1293,7 +1823,7 @@ export default function Dashboard() {
           onSelectCar={setSelectedDeviceId}
           playbackPoint={playbackPoint}
           geofences={geofences}
-          onMapClick={isAddingGeofence ? (lat: number, lon: number) => setNewGeofencePos({ lat, lon }) : undefined}
+          onMapClick={handleMapDestinationClick}
           isAddingGeofence={isAddingGeofence}
           isDarkMode={isDarkMode}
         />

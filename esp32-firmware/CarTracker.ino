@@ -1,3 +1,4 @@
+//ver1.2 3/25/2026 20:40
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -52,7 +53,7 @@ const unsigned long MAX_FIX_AGE_MS = 45000;
 
 void MQTT_connect();
 void processOfflineSync();
-void pushToSupabase(double lat, double lon, double speed, double alt, int sats, const char* timestamp = nullptr);
+bool pushToSupabase(double lat, double lon, double speed, double alt, int sats, const char* timestamp = nullptr);
 void renderDashboardOLED();
 
 void setup() {
@@ -147,20 +148,29 @@ void loop() {
   // Periodic Telemetry (valid fix + not stale — avoids isUpdated() missing publishes on long intervals)
   if (millis() - lastCloudPublish > PUBLISH_INTERVAL) {
     if (gps.location.isValid() && gps.location.age() < MAX_FIX_AGE_MS) {
+      char tsBuf[32] = {0};
+      const bool haveGpsTime = gps.time.isValid() && gps.date.isValid();
+      if (haveGpsTime) {
+        snprintf(tsBuf, sizeof(tsBuf), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+                 gps.date.year(), gps.date.month(), gps.date.day(),
+                 gps.time.hour(), gps.time.minute(), gps.time.second());
+      }
+
       if (mqtt.connected()) {
         String csv = String(gps.location.lat(), 6) + "," + String(gps.location.lng(), 6) + "," + String(gps.speed.kmph()) + "," + String(gps.altitude.meters());
         carTracker.publish(csv.c_str());
         Serial.println("[AIO] Published: " + csv);
       }
-      pushToSupabase(gps.location.lat(), gps.location.lng(), gps.speed.kmph(), gps.altitude.meters(), gps.satellites.value());
-      
-      // Only save local backup if we have a valid time fix (prevents dashboard jumps)
-      if (gps.time.isValid()) {
+      // Same GPS timestamp on successful POST keeps Supabase chronological when replaying after dead zones.
+      const bool uploaded =
+          pushToSupabase(gps.location.lat(), gps.location.lng(), gps.speed.kmph(), gps.altitude.meters(), gps.satellites.value(),
+                         haveGpsTime ? tsBuf : nullptr);
+
+      // Queue for /sync.csv only when we could not confirm cloud write (offline or HTTP error) — avoids duplicate rows.
+      if (haveGpsTime && !uploaded) {
         File f = LittleFS.open("/history.csv", FILE_APPEND);
         if (f) {
-          char ts[32];
-          snprintf(ts, 32, "%04d-%02d-%02dT%02d:%02d:%02dZ", gps.date.year(), gps.date.month(), gps.date.day(), gps.time.hour(), gps.time.minute(), gps.time.second());
-          f.printf("%s,%.6f,%.6f,%.1f,%.1f,%d\n", ts, gps.location.lat(), gps.location.lng(), gps.speed.kmph(), gps.altitude.meters(), (int)gps.satellites.value());
+          f.printf("%s,%.6f,%.6f,%.1f,%.1f,%d\n", tsBuf, gps.location.lat(), gps.location.lng(), gps.speed.kmph(), gps.altitude.meters(), (int)gps.satellites.value());
           f.close();
         }
       }
@@ -286,7 +296,8 @@ void processOfflineSync() {
 
   Serial.printf("[SYNC] Processing batch from offset %u...\n", lastSyncOffset);
   int count = 0;
-  while (f.available() && count < 5) {
+  // Larger batches drain LittleFS faster after long offline periods (watchdog-safe due to yield()).
+  while (f.available() && count < 18) {
     String line = f.readStringUntil('\n');
     lastSyncOffset = f.position(); // Keep track of progress
     line.trim();
@@ -317,7 +328,7 @@ void processOfflineSync() {
       String al = (fourth > 0 ? line.substring(fourth+1, (fifth > 0 ? fifth : line.length())) : "0");
       String sa = (fifth > 0 ? line.substring(fifth+1) : "0");
 
-      pushToSupabase(lt.toDouble(), ln.toDouble(), sp.toDouble(), al.toDouble(), sa.toInt(), ts.c_str());
+      (void)pushToSupabase(lt.toDouble(), ln.toDouble(), sp.toDouble(), al.toDouble(), sa.toInt(), ts.c_str());
       count++;
       yield();   
     }
@@ -334,8 +345,8 @@ void processOfflineSync() {
   }
 }
 
-void pushToSupabase(double lat, double lon, double speed, double alt, int sats, const char* timestamp) {
-  if (WiFi.status() != WL_CONNECTED) return;
+bool pushToSupabase(double lat, double lon, double speed, double alt, int sats, const char* timestamp) {
+  if (WiFi.status() != WL_CONNECTED) return false;
   WiFiClientSecure secureClient;
   secureClient.setInsecure();
   secureClient.setTimeout(2); // VERY SHORT timeout to prevent watchdog trigger
@@ -356,8 +367,13 @@ void pushToSupabase(double lat, double lon, double speed, double alt, int sats, 
 
   int code = http.POST(json);
   Serial.printf("  -> [SUPABASE] Code %d\n", code);
+  const bool ok = (code >= 200 && code < 300);
+  if (!ok) {
+    Serial.println("  -> [SUPABASE] POST failed; point remains in /history.csv or /sync.csv for later sync.");
+  }
   http.end();
   yield();
+  return ok;
 }
 
 void MQTT_connect() {

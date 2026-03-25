@@ -132,6 +132,14 @@ function screenSegmentBearingDeg(
   return ((deg % 360) + 360) % 360;
 }
 
+/** Keep turn-by-turn driving geometry above GPS trail segments so roads are visible. */
+function bringNavigationRouteLayersToTop(map: mapboxgl.Map) {
+  const ids = ["route-alt-0-line", "route-alt-1-line", "route-alt-2-line", "route-selected-line"];
+  for (const id of ids) {
+    if (map.getLayer(id)) map.moveLayer(id);
+  }
+}
+
 function escapeHtml(s: string): string {
   return String(s)
     .replace(/&/g, "&amp;")
@@ -618,6 +626,7 @@ export default function Map({
 
     const trailLayers = ["history-trail-beads", "history-arrows-layer"];
 
+    /** Short click / tap: trail popups / geofence point only — navigation uses long-press below. */
     const handleClick = (e: mapboxgl.MapMouseEvent) => {
       if (!isAddingGeofence) {
         const available = trailLayers.filter((id) => map.getLayer(id));
@@ -638,8 +647,96 @@ export default function Map({
         }
       }
       trailPopup.remove();
-      if (onMapClick) onMapClick(e.lngLat.lat, e.lngLat.lng);
+      if (isAddingGeofence && onMapClick) onMapClick(e.lngLat.lat, e.lngLat.lng);
     };
+
+    const LONG_PRESS_MS = 550;
+    /** Max pixel drift from initial down — stay ~still or we treat it as pan/zoom intent, not navigate. */
+    const LONG_PRESS_MOVE_PX = 8;
+
+    let longPressTimer: number | null = null;
+    let pressActive = false;
+    let startPoint: mapboxgl.Point | null = null;
+    let lastPointDuringPress: mapboxgl.Point | null = null;
+    let pressLngLat: mapboxgl.LngLat | null = null;
+
+    const clearNavigateLongPress = () => {
+      pressActive = false;
+      startPoint = null;
+      lastPointDuringPress = null;
+      pressLngLat = null;
+      if (longPressTimer !== null) {
+        window.clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+    };
+
+    const movedTooMuchFromStart = (p: mapboxgl.Point, start: mapboxgl.Point) => {
+      const dx = p.x - start.x;
+      const dy = p.y - start.y;
+      return dx * dx + dy * dy > LONG_PRESS_MOVE_PX * LONG_PRESS_MOVE_PX;
+    };
+
+    const onMoveDuringPress = (e: mapboxgl.MapMouseEvent | mapboxgl.MapTouchEvent) => {
+      if (!pressActive || !startPoint) return;
+      lastPointDuringPress = e.point;
+      if (movedTooMuchFromStart(e.point, startPoint)) clearNavigateLongPress();
+    };
+
+    /** User started panning the map — never treat that gesture as "navigate to here". */
+    const onNavigateDragStart = () => {
+      if (pressActive) clearNavigateLongPress();
+    };
+
+    const startNavigateLongPress = (e: mapboxgl.MapMouseEvent | mapboxgl.MapTouchEvent) => {
+      if (isAddingGeofence || !onMapClick) return;
+
+      clearNavigateLongPress();
+      pressActive = true;
+      startPoint = e.point;
+      lastPointDuringPress = e.point;
+      pressLngLat = e.lngLat;
+
+      longPressTimer = window.setTimeout(() => {
+        longPressTimer = null;
+        if (!pressActive || !pressLngLat || !startPoint) return;
+        if (lastPointDuringPress && movedTooMuchFromStart(lastPointDuringPress, startPoint)) return;
+
+        const ll = pressLngLat;
+        const available = trailLayers.filter((id) => map.getLayer(id));
+        if (available.length) {
+          const feats = map.queryRenderedFeatures(map.project(ll), { layers: available });
+          const hitTrail = feats.some((f) => f.geometry?.type === "Point");
+          if (hitTrail) {
+            clearNavigateLongPress();
+            return;
+          }
+        }
+
+        trailPopup.remove();
+        onMapClick(ll.lat, ll.lng);
+        clearNavigateLongPress();
+      }, LONG_PRESS_MS);
+    };
+
+    const onMouseDown = (e: mapboxgl.MapMouseEvent) => {
+      if (isAddingGeofence) return;
+      const oe = e.originalEvent;
+      if (!(oe instanceof MouseEvent) || oe.button !== 0) return;
+      const pe = oe as MouseEvent & { pointerType?: string };
+      if (pe.pointerType === "touch") return;
+      startNavigateLongPress(e);
+    };
+
+    const onMouseUpLeave = () => clearNavigateLongPress();
+
+    const onTouchStart = (e: mapboxgl.MapTouchEvent) => {
+      if (isAddingGeofence) return;
+      if (e.points.length !== 1) return;
+      startNavigateLongPress(e);
+    };
+
+    const onTouchEndCancel = () => clearNavigateLongPress();
 
     const onEnter = () => {
       if (!isAddingGeofence) map.getCanvas().style.cursor = "pointer";
@@ -649,6 +746,17 @@ export default function Map({
     };
 
     map.on("click", handleClick);
+    map.on("mousedown", onMouseDown);
+    map.on("mousemove", onMoveDuringPress);
+    map.on("mouseup", onMouseUpLeave);
+    map.on("mouseleave", onMouseUpLeave);
+    map.on("dragstart", onNavigateDragStart);
+
+    map.on("touchstart", onTouchStart);
+    map.on("touchmove", onMoveDuringPress);
+    map.on("touchend", onTouchEndCancel);
+    map.on("touchcancel", onTouchEndCancel);
+
     for (const id of trailLayers) {
       if (map.getLayer(id)) {
         map.on("mouseenter", id, onEnter);
@@ -660,7 +768,17 @@ export default function Map({
     else map.getCanvas().style.cursor = "";
 
     return () => {
+      clearNavigateLongPress();
       map.off("click", handleClick);
+      map.off("mousedown", onMouseDown);
+      map.off("mousemove", onMoveDuringPress);
+      map.off("mouseup", onMouseUpLeave);
+      map.off("mouseleave", onMouseUpLeave);
+      map.off("dragstart", onNavigateDragStart);
+      map.off("touchstart", onTouchStart);
+      map.off("touchmove", onMoveDuringPress);
+      map.off("touchend", onTouchEndCancel);
+      map.off("touchcancel", onTouchEndCancel);
       for (const id of trailLayers) {
         if (map.getLayer(id)) {
           map.off("mouseenter", id, onEnter);
@@ -898,6 +1016,11 @@ export default function Map({
       ["geofences-fill", "geofences-border", "history-trail-line", "history-trail-beads", "history-arrows-layer", "stop-circles"].forEach((id) => {
         if (map.getLayer(id)) map.moveLayer(id);
       });
+
+      const hasRoadRoute =
+        (etaInfo && etaInfo.routeLine.length > 1) ||
+        alternativeRoutes.some((r) => r.routeLine.length > 1);
+      if (hasRoadRoute) bringNavigationRouteLayersToTop(map);
     };
 
     applyHistoryTrail();
@@ -914,7 +1037,7 @@ export default function Map({
       map.off("rotateend", onCamera);
       map.off("pitchend", onCamera);
     };
-  }, [selectedHistory, mapLoaded]);
+  }, [selectedHistory, mapLoaded, etaInfo, alternativeRoutes]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -988,8 +1111,24 @@ export default function Map({
       } else if (etaInfo && etaInfo.routeLine.length > 0) {
         selSource.setData({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: etaInfo.routeLine.map(([lat, lng]) => [lng, lat]) } });
       }
+      if (
+        (etaInfo && etaInfo.routeLine.length > 1) ||
+        alternativeRoutes.some((r) => r.routeLine.length > 1)
+      ) {
+        bringNavigationRouteLayersToTop(map);
+      }
     }
   }, [etaInfo, alternativeRoutes, selectedRouteIndex, mapLoaded]);
+
+  /** GPS history connects raw points with straight segments; fade it while a road route is shown. */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded || !map.getLayer("history-trail-line")) return;
+    const hasRoadRoute =
+      (etaInfo && etaInfo.routeLine.length > 1) ||
+      (alternativeRoutes.length > 0 && alternativeRoutes.some((r) => r.routeLine.length > 1));
+    map.setPaintProperty("history-trail-line", "line-opacity", hasRoadRoute ? 0.2 : 0.85);
+  }, [etaInfo, alternativeRoutes, mapLoaded]);
 
   useEffect(() => {
     const map = mapRef.current;
