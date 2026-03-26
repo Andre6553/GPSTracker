@@ -296,6 +296,7 @@ export default function Dashboard() {
   // Telegram Linking State
   const [telegramId, setTelegramId] = useState("");
   const [isLinkingTelegram, setIsLinkingTelegram] = useState(false);
+  const [telegramChats, setTelegramChats] = useState<{ chat_id: string; created_at?: string }[]>([]);
 
   const sendRemoteCommand = async (command: string, targetId?: string) => {
     const target = targetId || selectedDeviceId;
@@ -365,6 +366,7 @@ export default function Dashboard() {
           setSpeedAlertsEnabled(settings.speed_alerts_enabled !== false);
           setGeofenceAlertsEnabled(settings.geofence_alerts_enabled !== false);
           if (settings.fuel_cost) setFuelCost(settings.fuel_cost);
+          // Legacy fallback only (single chat id). Primary linkage is now user_telegram_chats.
           if (settings.telegram_chat_id) setTelegramId(String(settings.telegram_chat_id));
           if (settings.eta_highway_over_limit_kmh != null && Number.isFinite(Number(settings.eta_highway_over_limit_kmh))) {
             setEtaHighwayOverKmh(Number(settings.eta_highway_over_limit_kmh));
@@ -374,6 +376,14 @@ export default function Dashboard() {
           }
           lastSavedSettings.current = settings;
         }
+
+        // Load linked Telegram chats (DM + groups)
+        const { data: chats } = await supabase
+          .from("user_telegram_chats")
+          .select("chat_id,created_at")
+          .eq("user_id", activeSession.user.id)
+          .order("created_at", { ascending: false });
+        if (chats) setTelegramChats(chats as any);
         
         setAuthChecked(true);
       }
@@ -387,7 +397,6 @@ export default function Dashboard() {
     // Only save if something actually changed from what we last loaded/saved
     if (lastSavedSettings.current &&
         fuelCost === lastSavedSettings.current.fuel_cost &&
-        telegramId === (lastSavedSettings.current.telegram_chat_id || "") &&
         speedAlertsEnabled === (lastSavedSettings.current.speed_alerts_enabled !== false) &&
         geofenceAlertsEnabled === (lastSavedSettings.current.geofence_alerts_enabled !== false) &&
         etaHighwayOverKmh === Number(lastSavedSettings.current.eta_highway_over_limit_kmh ?? 20) &&
@@ -401,7 +410,6 @@ export default function Dashboard() {
         .upsert({ 
           user_id: session.user.id, 
           fuel_cost: fuelCost,
-          telegram_chat_id: telegramId,
           speed_alerts_enabled: speedAlertsEnabled,
           geofence_alerts_enabled: geofenceAlertsEnabled,
           eta_highway_over_limit_kmh: etaHighwayOverKmh,
@@ -418,7 +426,7 @@ export default function Dashboard() {
     }, 2000); // 2s debounce
 
     return () => clearTimeout(timer);
-  }, [fuelCost, telegramId, speedAlertsEnabled, geofenceAlertsEnabled, etaHighwayOverKmh, etaUrbanOverKmh, session, authChecked]);
+  }, [fuelCost, speedAlertsEnabled, geofenceAlertsEnabled, etaHighwayOverKmh, etaUrbanOverKmh, session, authChecked]);
 
   // PERSISTENCE: Save Device Configs (Speed, Fuel Rate)
   useEffect(() => {
@@ -1041,21 +1049,54 @@ export default function Dashboard() {
   const handleLinkTelegram = async () => {
     if (!session) return;
     setIsLinkingTelegram(true);
-    const { error } = await supabase
-      .from("user_settings")
-      .upsert({ 
-        user_id: session.user.id, 
-        telegram_chat_id: telegramId.trim(),
-        speed_alerts_enabled: speedAlertsEnabled, // Preserve other settings
-        geofence_alerts_enabled: geofenceAlertsEnabled
-      }, { onConflict: 'user_id' });
-    
-    if (!error) {
-      alert("Telegram Link Updated!");
-    } else {
-      alert("Error linking Telegram: " + error.message);
+    const chatId = telegramId.trim();
+    if (!chatId) {
+      setIsLinkingTelegram(false);
+      return;
     }
+
+    const { error: linkErr } = await supabase
+      .from("user_telegram_chats")
+      .insert({ user_id: session.user.id, chat_id: chatId });
+
+    // Keep legacy field updated for backwards compatibility (webhook now prefers user_telegram_chats).
+    const { error: legacyErr } = await supabase
+      .from("user_settings")
+      .upsert({
+        user_id: session.user.id,
+        telegram_chat_id: chatId,
+        speed_alerts_enabled: speedAlertsEnabled,
+        geofence_alerts_enabled: geofenceAlertsEnabled,
+      }, { onConflict: "user_id" });
+
+    if (!linkErr) {
+      const { data: chats } = await supabase
+        .from("user_telegram_chats")
+        .select("chat_id,created_at")
+        .eq("user_id", session.user.id)
+        .order("created_at", { ascending: false });
+      if (chats) setTelegramChats(chats as any);
+      alert("Telegram chat linked!");
+    } else {
+      alert("Error linking Telegram: " + linkErr.message);
+    }
+    if (legacyErr) console.warn("Legacy telegram_chat_id save error:", legacyErr.message);
     setIsLinkingTelegram(false);
+  };
+
+  const handleUnlinkTelegramChat = async (chatId: string) => {
+    if (!session) return;
+    if (!confirm(`Unlink Telegram chat ${chatId}?`)) return;
+    const { error } = await supabase
+      .from("user_telegram_chats")
+      .delete()
+      .eq("user_id", session.user.id)
+      .eq("chat_id", chatId);
+    if (error) {
+      alert("Failed to unlink: " + error.message);
+      return;
+    }
+    setTelegramChats((prev) => prev.filter((c) => c.chat_id !== chatId));
   };
 
   // Playback
@@ -1560,7 +1601,7 @@ export default function Dashboard() {
                   <h2 className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest flex items-center gap-2 mb-4">Telegram Control</h2>
                   <div className="flex flex-col gap-3">
                     <p className="text-[10px] text-slate-500 leading-relaxed italic">
-                      Paste your Telegram Chat ID here to enable remote commands like /killon. You can get your ID from the bot using /groupid.
+                      Link one or more Telegram chat IDs (your DM and/or a group) to enable /findme, /locate, /killon. Get the chat ID from the bot using /groupid (groups usually start with -100...).
                     </p>
                     <div className="flex gap-2">
                        <input 
@@ -1577,6 +1618,28 @@ export default function Dashboard() {
                       >
                         {isLinkingTelegram ? "..." : "Link"}
                       </button>
+                    </div>
+                    <div className="mt-1">
+                      <p className="text-[10px] text-slate-500 uppercase font-bold mb-2">Linked chats ({telegramChats.length})</p>
+                      {telegramChats.length === 0 ? (
+                        <p className="text-[10px] text-slate-500">None yet. Link your DM and/or group chat id.</p>
+                      ) : (
+                        <div className="flex flex-col gap-2">
+                          {telegramChats.map((c) => (
+                            <div key={c.chat_id} className="flex justify-between items-center bg-slate-900/50 border border-slate-700 p-2.5 rounded-lg">
+                              <code className="text-[11px] text-slate-200">{c.chat_id}</code>
+                              <button
+                                type="button"
+                                onClick={() => handleUnlinkTelegramChat(c.chat_id)}
+                                className="text-slate-500 hover:text-red-400"
+                                aria-label={`Unlink ${c.chat_id}`}
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

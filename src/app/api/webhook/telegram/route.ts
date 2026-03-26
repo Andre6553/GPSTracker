@@ -16,6 +16,31 @@ const supabaseService =
       })
     : null;
 
+function normalizeTelegramCommand(raw: string): string {
+  const t = raw.toLowerCase().trim();
+  if (!t.startsWith("/")) return t;
+  const at = t.indexOf("@");
+  return at > 0 ? t.slice(0, at) : t;
+}
+
+async function resolveUserIdForChat(client: any, chatId: string): Promise<string | null> {
+  // Preferred: multi-chat table
+  const { data: link } = await client
+    .from("user_telegram_chats")
+    .select("user_id")
+    .eq("chat_id", chatId)
+    .maybeSingle();
+  if (link?.user_id) return String(link.user_id);
+
+  // Legacy fallback: single chat id in user_settings
+  const { data: legacy } = await client
+    .from("user_settings")
+    .select("user_id")
+    .eq("telegram_chat_id", chatId)
+    .maybeSingle();
+  return legacy?.user_id ? String(legacy.user_id) : null;
+}
+
 async function sendTelegram(chatId: string, text: string) {
   if (!BOT_TOKEN) {
     // #region agent log
@@ -168,7 +193,7 @@ export async function POST(req: NextRequest) {
 
     const chatId = String(message.chat.id);
     const rawText = message.text;
-    const text = message.text.toLowerCase().trim();
+    const text = normalizeTelegramCommand(message.text);
 
     // #region agent log
     console.log("[TelegramWebhook][cmd]", {
@@ -206,20 +231,18 @@ export async function POST(req: NextRequest) {
     // Standard Commands
     if (text === "/status") {
       const client = supabaseService ?? supabase;
-      const { data } = await client.from("user_settings").select("*").eq("telegram_chat_id", chatId).single();
+      const userId = await resolveUserIdForChat(client, chatId);
+      const { data } = userId
+        ? await client.from("user_settings").select("*").eq("user_id", userId).maybeSingle()
+        : await client.from("user_settings").select("*").eq("telegram_chat_id", chatId).maybeSingle();
       const speed = data?.speed_alerts_enabled !== false ? "ON ✅" : "OFF 🛑";
       const geofence = data?.geofence_alerts_enabled !== false ? "ON ✅" : "OFF 🛑";
       await sendTelegram(chatId, `📊 <b>Status</b>\nSpeed Alerts: ${speed}\nZone Alerts: ${geofence}`);
     } 
     else if (text === "/whoami") {
       const client = supabaseService ?? supabase;
-      const { data: settings, error: settingsErr } = await client
-        .from("user_settings")
-        .select("user_id")
-        .eq("telegram_chat_id", chatId)
-        .single();
-
-      const userId = settings?.user_id ?? null;
+      const userId = await resolveUserIdForChat(client, chatId);
+      const settingsErr = userId ? null : { message: "No chat link found" };
 
       let deviceIds: string[] = [];
       let devicesErrMsg: string | null = null;
@@ -241,7 +264,7 @@ export async function POST(req: NextRequest) {
         `Service role: <b>${supabaseService ? "ON" : "OFF"}</b>`,
         `User: <code>${userId ?? "NONE"}</code>`,
         `Devices: <b>${deviceIds.length}</b>${more}${list.length ? `\n<code>${list.join(", ")}</code>` : ""}`,
-        settingsErr ? `\nuser_settings error: <code>${settingsErr.message}</code>` : "",
+        settingsErr ? `\nlink error: <code>${settingsErr.message}</code>` : "",
         devicesErrMsg ? `\nuser_devices error: <code>${devicesErrMsg}</code>` : "",
       ]
         .filter(Boolean)
@@ -276,13 +299,7 @@ export async function POST(req: NextRequest) {
       const client = supabaseService ?? supabase;
 
       // Resolve which device(s) belong to this Telegram user, then fetch latest telemetry for those.
-      const { data: settings } = await client
-        .from("user_settings")
-        .select("user_id")
-        .eq("telegram_chat_id", chatId)
-        .single();
-
-      const userId = settings?.user_id;
+      const userId = await resolveUserIdForChat(client, chatId);
       // Single-line log to avoid Vercel truncation of nested JSON.
       console.log(
         `[TelegramWebhook] /findme user_settings lookup chatId=${chatId} hasUserId=${!!userId} userId=${userId ?? "null"} usingServiceRole=${!!supabaseService}`
@@ -375,17 +392,19 @@ export async function POST(req: NextRequest) {
       const isAdmin = chatId === adminChatId;
 
       let deviceIds: string[] = [];
-      const { data: settings } = await supabase.from("user_settings").select("user_id").eq("telegram_chat_id", chatId).single();
+      const client = supabaseService ?? supabase;
+      const userId = await resolveUserIdForChat(client, chatId);
+      const settings = userId ? { user_id: userId } : null;
       
       if (settings) {
-        const { data: devices } = await supabase.from("user_devices").select("device_id").eq("user_id", settings.user_id);
+        const { data: devices } = await client.from("user_devices").select("device_id").eq("user_id", settings.user_id);
         if (devices && devices.length > 0) deviceIds = devices.map(d => d.device_id);
       } 
       
       // Fallback for Admin
       if (deviceIds.length === 0 && isAdmin) {
         // Attempt one last check on telemetry if settings link is missing
-        const { data: telemetry } = await supabase.from("telemetry").select("device_id").limit(10);
+        const { data: telemetry } = await client.from("telemetry").select("device_id").limit(10);
         if (telemetry && telemetry.length > 0) {
           deviceIds = Array.from(new Set(telemetry.map(t => t.device_id)));
         } else {
