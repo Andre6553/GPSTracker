@@ -211,6 +211,44 @@ export async function POST(req: NextRequest) {
       const geofence = data?.geofence_alerts_enabled !== false ? "ON ✅" : "OFF 🛑";
       await sendTelegram(chatId, `📊 <b>Status</b>\nSpeed Alerts: ${speed}\nZone Alerts: ${geofence}`);
     } 
+    else if (text === "/whoami") {
+      const client = supabaseService ?? supabase;
+      const { data: settings, error: settingsErr } = await client
+        .from("user_settings")
+        .select("user_id")
+        .eq("telegram_chat_id", chatId)
+        .single();
+
+      const userId = settings?.user_id ?? null;
+
+      let deviceIds: string[] = [];
+      let devicesErrMsg: string | null = null;
+      if (userId) {
+        const { data: devices, error: devicesErr } = await client
+          .from("user_devices")
+          .select("device_id")
+          .eq("user_id", userId);
+        deviceIds = (devices || []).map((d: any) => String(d.device_id)).filter(Boolean);
+        devicesErrMsg = devicesErr ? devicesErr.message : null;
+      }
+
+      const list = deviceIds.slice(0, 10);
+      const more = deviceIds.length > list.length ? ` (+${deviceIds.length - list.length} more)` : "";
+
+      const msg = [
+        `🧾 <b>Who am I</b>`,
+        `Chat: <code>${chatId}</code>`,
+        `Service role: <b>${supabaseService ? "ON" : "OFF"}</b>`,
+        `User: <code>${userId ?? "NONE"}</code>`,
+        `Devices: <b>${deviceIds.length}</b>${more}${list.length ? `\n<code>${list.join(", ")}</code>` : ""}`,
+        settingsErr ? `\nuser_settings error: <code>${settingsErr.message}</code>` : "",
+        devicesErrMsg ? `\nuser_devices error: <code>${devicesErrMsg}</code>` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      await sendTelegram(chatId, msg);
+    }
     else if (text === "/findme" || text === "/locate") {
       // #region agent log
       console.log("[TelegramWebhook] entered findme/locate branch", { chatId, normalizedText: text });
