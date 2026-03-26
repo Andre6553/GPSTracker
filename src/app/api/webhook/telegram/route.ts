@@ -2,15 +2,86 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const DEBUG_LOG_ENDPOINT =
+  "http://127.0.0.1:7727/ingest/2d46f0c7-4e8b-4db0-80aa-a61519a17974";
+const DEBUG_SESSION_ID = "b56b0f";
 
 async function sendTelegram(chatId: string, text: string) {
-  if (!BOT_TOKEN) return;
+  if (!BOT_TOKEN) {
+    // #region agent log
+    console.log("[TelegramWebhook][sendTelegram] BOT_TOKEN missing; skipping send", { chatId });
+    fetch(DEBUG_LOG_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Debug-Session-Id": DEBUG_SESSION_ID,
+      },
+      body: JSON.stringify({
+        sessionId: DEBUG_SESSION_ID,
+        runId: "pre-debug",
+        hypothesisId: "H2",
+        location: "src/app/api/webhook/telegram/route.ts:sendTelegram-missing-token",
+        message: "BOT_TOKEN missing; sendTelegram skipped",
+        data: {},
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
+    return;
+  }
   const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
-  await fetch(url, {
+  let ok = false;
+  let status: number | null = null;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
+    });
+    console.log("[TelegramWebhook][sendTelegram] sendMessage result", { chatId, ok: res.ok, status: res.status });
+    ok = res.ok;
+    status = res.status;
+  } catch (e: any) {
+    // #region agent log
+    console.log("[TelegramWebhook][sendTelegram] fetch threw", { chatId, err: e?.message || String(e) });
+    fetch(DEBUG_LOG_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Debug-Session-Id": DEBUG_SESSION_ID,
+      },
+      body: JSON.stringify({
+        sessionId: DEBUG_SESSION_ID,
+        runId: "pre-debug",
+        hypothesisId: "H2",
+        location: "src/app/api/webhook/telegram/route.ts:sendTelegram-fetch-error",
+        message: "Telegram sendMessage fetch threw",
+        data: { errorMessage: e?.message || String(e) },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
+    throw e;
+  }
+
+  // #region agent log
+  fetch(DEBUG_LOG_ENDPOINT, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
-  }).catch(e => console.error("Telegram send error:", e));
+    headers: {
+      "Content-Type": "application/json",
+      "X-Debug-Session-Id": DEBUG_SESSION_ID,
+    },
+    body: JSON.stringify({
+      sessionId: DEBUG_SESSION_ID,
+      runId: "pre-debug",
+      hypothesisId: "H2",
+      location: "src/app/api/webhook/telegram/route.ts:sendTelegram-result",
+      message: "Telegram sendMessage completed",
+      data: { ok, status },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
 }
 
 export async function POST(req: NextRequest) {
@@ -86,7 +157,41 @@ export async function POST(req: NextRequest) {
     if (!message || !message.text) return NextResponse.json({ ok: true });
 
     const chatId = String(message.chat.id);
+    const rawText = message.text;
     const text = message.text.toLowerCase().trim();
+
+    // #region agent log
+    console.log("[TelegramWebhook][cmd]", {
+      chatId,
+      rawText,
+      normalizedText: text,
+      hasAt: text.includes("@"),
+      equalsFindme: text === "/findme",
+      equalsLocate: text === "/locate",
+    });
+    fetch(DEBUG_LOG_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Debug-Session-Id": DEBUG_SESSION_ID,
+      },
+      body: JSON.stringify({
+        sessionId: DEBUG_SESSION_ID,
+        runId: "pre-debug",
+        hypothesisId: "H3",
+        location: "src/app/api/webhook/telegram/route.ts:command-normalization",
+        message: "Telegram regular command text received",
+        data: {
+          rawText,
+          normalizedText: text,
+          hasAt: text.includes("@"),
+          equalsFindme: text === "/findme",
+          equalsLocate: text === "/locate",
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
 
     // Standard Commands
     if (text === "/status") {
@@ -96,7 +201,64 @@ export async function POST(req: NextRequest) {
       await sendTelegram(chatId, `📊 <b>Status</b>\nSpeed Alerts: ${speed}\nZone Alerts: ${geofence}`);
     } 
     else if (text === "/findme" || text === "/locate") {
-      const { data: latest } = await supabase.from("telemetry").select("*").order("created_at", { ascending: false }).limit(1);
+      // #region agent log
+      console.log("[TelegramWebhook] entered findme/locate branch", { chatId, normalizedText: text });
+      fetch(DEBUG_LOG_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Debug-Session-Id": DEBUG_SESSION_ID,
+        },
+        body: JSON.stringify({
+          sessionId: DEBUG_SESSION_ID,
+          runId: "pre-debug",
+          hypothesisId: "H4",
+          location: "src/app/api/webhook/telegram/route.ts:findme-branch",
+          message: "Entered /findme or /locate branch",
+          data: {
+            normalizedText: text,
+            botTokenConfigured: !!BOT_TOKEN,
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion
+
+      const { data: latest, error } = await supabase
+        .from("telemetry")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      // #region agent log
+      console.log("[TelegramWebhook] supabase telemetry query result", {
+        chatId,
+        hasLatest: !!(latest && latest[0]),
+        latestLen: Array.isArray(latest) ? latest.length : null,
+        supabaseError: error ? { message: error.message, code: (error as any).code } : null,
+      });
+      fetch(DEBUG_LOG_ENDPOINT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Debug-Session-Id": DEBUG_SESSION_ID,
+        },
+        body: JSON.stringify({
+          sessionId: DEBUG_SESSION_ID,
+          runId: "pre-debug",
+          hypothesisId: "H1",
+          location: "src/app/api/webhook/telegram/route.ts:findme-supabase-query",
+          message: "Supabase telemetry query result for /findme",
+          data: {
+            hasLatest: !!(latest && latest[0]),
+            latestLen: Array.isArray(latest) ? latest.length : null,
+            error: error ? { message: error.message, code: (error as any).code } : null,
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion
+
       if (latest && latest[0]) {
         const p = latest[0];
         const mapsUrl = `https://www.google.com/maps?q=${p.lat},${p.lon}`;
