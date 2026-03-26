@@ -297,6 +297,9 @@ export default function Dashboard() {
   const [telegramId, setTelegramId] = useState("");
   const [isLinkingTelegram, setIsLinkingTelegram] = useState(false);
   const [telegramChats, setTelegramChats] = useState<{ chat_id: string; created_at?: string }[]>([]);
+  /** Picks which row to unlink in the Devices tab dropdowns (avoids huge scroll lists). */
+  const [deviceUnlinkPick, setDeviceUnlinkPick] = useState<string>("");
+  const [telegramUnlinkPick, setTelegramUnlinkPick] = useState<string>("");
 
   const sendRemoteCommand = async (command: string, targetId?: string) => {
     const target = targetId || selectedDeviceId;
@@ -1099,6 +1102,23 @@ export default function Dashboard() {
     setTelegramChats((prev) => prev.filter((c) => c.chat_id !== chatId));
   };
 
+  useEffect(() => {
+    setDeviceUnlinkPick((p) => {
+      if (assignedDevices.length === 0) return "";
+      if (p && assignedDevices.includes(p)) return p;
+      return assignedDevices[0];
+    });
+  }, [assignedDevices]);
+
+  useEffect(() => {
+    const ids = telegramChats.map((c) => c.chat_id);
+    setTelegramUnlinkPick((p) => {
+      if (ids.length === 0) return "";
+      if (p && ids.includes(p)) return p;
+      return ids[0] ?? "";
+    });
+  }, [telegramChats]);
+
   // Playback
   useEffect(() => {
     if (isPlaying && selectedHistory.length > 0) {
@@ -1624,20 +1644,28 @@ export default function Dashboard() {
                       {telegramChats.length === 0 ? (
                         <p className="text-[10px] text-slate-500">None yet. Link your DM and/or group chat id.</p>
                       ) : (
-                        <div className="flex flex-col gap-2">
-                          {telegramChats.map((c) => (
-                            <div key={c.chat_id} className="flex justify-between items-center bg-slate-900/50 border border-slate-700 p-2.5 rounded-lg">
-                              <code className="text-[11px] text-slate-200">{c.chat_id}</code>
-                              <button
-                                type="button"
-                                onClick={() => handleUnlinkTelegramChat(c.chat_id)}
-                                className="text-slate-500 hover:text-red-400"
-                                aria-label={`Unlink ${c.chat_id}`}
-                              >
-                                <X className="w-4 h-4" />
-                              </button>
-                            </div>
-                          ))}
+                        <div className="flex gap-2 items-stretch">
+                          <select
+                            value={telegramUnlinkPick}
+                            onChange={(e) => setTelegramUnlinkPick(e.target.value)}
+                            className="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-[11px] text-slate-200 font-mono focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+                            aria-label="Select a linked Telegram chat"
+                          >
+                            {telegramChats.map((c) => (
+                              <option key={c.chat_id} value={c.chat_id}>
+                                {c.chat_id}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => telegramUnlinkPick && handleUnlinkTelegramChat(telegramUnlinkPick)}
+                            disabled={!telegramUnlinkPick}
+                            className="shrink-0 px-3 rounded-lg border border-slate-700 bg-slate-900/50 text-slate-500 hover:text-red-400 hover:border-red-900/50 transition disabled:opacity-40"
+                            aria-label="Remove selected Telegram chat"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
                         </div>
                       )}
                     </div>
@@ -1646,14 +1674,33 @@ export default function Dashboard() {
 
                 <div className="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
                   <h2 className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest flex items-center gap-2 mb-3">Linked ({assignedDevices.length})</h2>
-                  <div className="flex flex-col gap-2">
-                    {assignedDevices.map(id => (
-                      <div key={id} className="flex justify-between items-center bg-slate-900/50 border border-slate-700 p-2.5 rounded-lg">
-                        <span className="text-sm font-bold text-white">{id}</span>
-                        <button onClick={() => handleRemoveDevice(id)} className="text-slate-500 hover:text-red-400"><X className="w-4 h-4" /></button>
-                      </div>
-                    ))}
-                  </div>
+                  {assignedDevices.length === 0 ? (
+                    <p className="text-[10px] text-slate-500">No devices linked yet.</p>
+                  ) : (
+                    <div className="flex gap-2 items-stretch">
+                      <select
+                        value={deviceUnlinkPick}
+                        onChange={(e) => setDeviceUnlinkPick(e.target.value)}
+                        className="flex-1 min-w-0 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white font-bold focus:outline-none focus:ring-1 focus:ring-blue-500/50"
+                        aria-label="Select a linked device"
+                      >
+                        {assignedDevices.map((id) => (
+                          <option key={id} value={id}>
+                            {id}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => deviceUnlinkPick && handleRemoveDevice(deviceUnlinkPick)}
+                        disabled={!deviceUnlinkPick}
+                        className="shrink-0 px-3 rounded-lg border border-slate-700 bg-slate-900/50 text-slate-500 hover:text-red-400 hover:border-red-900/50 transition disabled:opacity-40"
+                        aria-label="Unlink selected device"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
