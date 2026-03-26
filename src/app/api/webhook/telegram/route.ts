@@ -248,6 +248,7 @@ export async function POST(req: NextRequest) {
       console.log("[TelegramWebhook] /findme user_settings lookup", {
         chatId,
         hasUserId: !!userId,
+        usingServiceRole: !!supabaseService,
       });
       if (!userId) {
         await sendTelegram(chatId, "⚠️ <b>No devices linked</b> for this Telegram chat.");
