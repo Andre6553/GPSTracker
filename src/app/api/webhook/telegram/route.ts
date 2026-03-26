@@ -245,6 +245,10 @@ export async function POST(req: NextRequest) {
         .single();
 
       const userId = settings?.user_id;
+      console.log("[TelegramWebhook] /findme user_settings lookup", {
+        chatId,
+        hasUserId: !!userId,
+      });
       if (!userId) {
         await sendTelegram(chatId, "⚠️ <b>No devices linked</b> for this Telegram chat.");
         return NextResponse.json({ ok: true });
@@ -256,6 +260,12 @@ export async function POST(req: NextRequest) {
         .eq("user_id", userId);
 
       const deviceIds = (devices || []).map((d: any) => d.device_id).filter(Boolean);
+      console.log("[TelegramWebhook] /findme user_devices lookup", {
+        chatId,
+        userId,
+        deviceIdsCount: deviceIds.length,
+        deviceIdsPreview: deviceIds.slice(0, 5),
+      });
       if (deviceIds.length === 0) {
         await sendTelegram(chatId, "⚠️ <b>No devices linked</b> for this Telegram chat.");
         return NextResponse.json({ ok: true });
