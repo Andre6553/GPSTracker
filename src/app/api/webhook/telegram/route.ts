@@ -1,10 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { createClient } from "@supabase/supabase-js";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const DEBUG_LOG_ENDPOINT =
   "http://127.0.0.1:7727/ingest/2d46f0c7-4e8b-4db0-80aa-a61519a17974";
 const DEBUG_SESSION_ID = "b56b0f";
+
+// Webhook requests come without an authenticated user; anon-key + RLS can return 0 rows.
+// For Telegram reads (latest position / settings), use the service-role key.
+const supabaseService =
+  process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
+    ? createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      })
+    : null;
 
 async function sendTelegram(chatId: string, text: string) {
   if (!BOT_TOKEN) {
@@ -195,7 +205,8 @@ export async function POST(req: NextRequest) {
 
     // Standard Commands
     if (text === "/status") {
-      const { data } = await supabase.from("user_settings").select("*").eq("telegram_chat_id", chatId).single();
+      const client = supabaseService ?? supabase;
+      const { data } = await client.from("user_settings").select("*").eq("telegram_chat_id", chatId).single();
       const speed = data?.speed_alerts_enabled !== false ? "ON ✅" : "OFF 🛑";
       const geofence = data?.geofence_alerts_enabled !== false ? "ON ✅" : "OFF 🛑";
       await sendTelegram(chatId, `📊 <b>Status</b>\nSpeed Alerts: ${speed}\nZone Alerts: ${geofence}`);
@@ -224,9 +235,36 @@ export async function POST(req: NextRequest) {
       }).catch(() => {});
       // #endregion
 
-      const { data: latest, error } = await supabase
+      const client = supabaseService ?? supabase;
+
+      // Resolve which device(s) belong to this Telegram user, then fetch latest telemetry for those.
+      const { data: settings } = await client
+        .from("user_settings")
+        .select("user_id")
+        .eq("telegram_chat_id", chatId)
+        .single();
+
+      const userId = settings?.user_id;
+      if (!userId) {
+        await sendTelegram(chatId, "⚠️ <b>No devices linked</b> for this Telegram chat.");
+        return NextResponse.json({ ok: true });
+      }
+
+      const { data: devices } = await client
+        .from("user_devices")
+        .select("device_id")
+        .eq("user_id", userId);
+
+      const deviceIds = (devices || []).map((d: any) => d.device_id).filter(Boolean);
+      if (deviceIds.length === 0) {
+        await sendTelegram(chatId, "⚠️ <b>No devices linked</b> for this Telegram chat.");
+        return NextResponse.json({ ok: true });
+      }
+
+      const { data: latest, error } = await client
         .from("telemetry")
         .select("*")
+        .in("device_id", deviceIds)
         .order("created_at", { ascending: false })
         .limit(1);
 
@@ -235,6 +273,8 @@ export async function POST(req: NextRequest) {
         chatId,
         hasLatest: !!(latest && latest[0]),
         latestLen: Array.isArray(latest) ? latest.length : null,
+        usingServiceRole: !!supabaseService,
+        deviceIdsCount: deviceIds.length,
         supabaseError: error ? { message: error.message, code: (error as any).code } : null,
       });
       fetch(DEBUG_LOG_ENDPOINT, {
