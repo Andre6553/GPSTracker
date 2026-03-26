@@ -245,11 +245,10 @@ export async function POST(req: NextRequest) {
         .single();
 
       const userId = settings?.user_id;
-      console.log("[TelegramWebhook] /findme user_settings lookup", {
-        chatId,
-        hasUserId: !!userId,
-        usingServiceRole: !!supabaseService,
-      });
+      // Single-line log to avoid Vercel truncation of nested JSON.
+      console.log(
+        `[TelegramWebhook] /findme user_settings lookup chatId=${chatId} hasUserId=${!!userId} userId=${userId ?? "null"} usingServiceRole=${!!supabaseService}`
+      );
       if (!userId) {
         await sendTelegram(chatId, "⚠️ <b>No devices linked</b> for this Telegram chat.");
         return NextResponse.json({ ok: true });
@@ -261,12 +260,11 @@ export async function POST(req: NextRequest) {
         .eq("user_id", userId);
 
       const deviceIds = (devices || []).map((d: any) => d.device_id).filter(Boolean);
-      console.log("[TelegramWebhook] /findme user_devices lookup", {
-        chatId,
-        userId,
-        deviceIdsCount: deviceIds.length,
-        deviceIdsPreview: deviceIds.slice(0, 5),
-      });
+      console.log(
+        `[TelegramWebhook] /findme user_devices lookup chatId=${chatId} userId=${userId} deviceIdsCount=${deviceIds.length} deviceIdsPreview=${deviceIds
+          .slice(0, 5)
+          .join(",")}`
+      );
       if (deviceIds.length === 0) {
         await sendTelegram(chatId, "⚠️ <b>No devices linked</b> for this Telegram chat.");
         return NextResponse.json({ ok: true });
