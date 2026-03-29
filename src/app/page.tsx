@@ -9,7 +9,7 @@ import {
   Search, Navigation, Gauge, TrendingUp, MapPin, Map as LucideMap,
   Fuel, Tag, AlertTriangle, Zap, Menu, X, Filter, Download, RotateCcw,
   Sun, Moon, Calendar,   Play, Pause, SkipForward, Clock, Plus, Route,
-  Lock, Unlock, CircleStop, ChevronDown, ChevronUp
+  Lock, Unlock, CircleStop, ChevronDown, ChevronUp, RefreshCw
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import SpeedChart from "@/components/SpeedChart";
@@ -594,38 +594,64 @@ export default function Dashboard() {
     router.push("/login");
   };
 
+  /** Pull latest row per device from Supabase (works when Realtime is off or the socket stalled). */
+  const refetchFleetLatest = useCallback(async () => {
+    if (assignedDevices.length === 0) return;
+    const { data, error } = await supabase
+      .from("telemetry")
+      .select("*")
+      .in("device_id", assignedDevices)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.warn("refetchFleetLatest:", error.message);
+      return;
+    }
+    if (data && data.length > 0) {
+      const latestMap: Record<string, TelemetryPoint> = {};
+      data.forEach((p: any) => {
+        if (!latestMap[p.device_id]) latestMap[p.device_id] = p;
+      });
+      const latestList = Object.values(latestMap);
+      setAllData(latestList);
+
+      setLastHeard((prev) => {
+        const newMap = { ...prev };
+        latestList.forEach((p) => {
+          newMap[p.device_id] = p.created_at;
+        });
+        return newMap;
+      });
+
+      setSelectedDeviceId((prev) => prev || latestList[0]?.device_id || null);
+    }
+  }, [assignedDevices]);
+
+  // Polling: mobile / background tabs often suspend WebSockets — keep markers fresh.
+  useEffect(() => {
+    if (!authChecked || assignedDevices.length === 0) return;
+    const id = setInterval(() => {
+      void refetchFleetLatest();
+    }, 25000);
+    return () => clearInterval(id);
+  }, [authChecked, assignedDevices, refetchFleetLatest]);
+
+  // When returning to the tab, resync latest positions and reload the history trail (missed inserts).
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      void refetchFleetLatest();
+      setHistorySyncNonce((n) => n + 1);
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [refetchFleetLatest]);
+
   // Initialize Data & Realtime Subscription
   useEffect(() => {
     if (!authChecked || assignedDevices.length === 0) return;
-    
-    async function loadLatestPositions() {
-      const { data } = await supabase
-        .from("telemetry")
-        .select("*")
-        .in("device_id", assignedDevices)
-        .order("created_at", { ascending: false });
 
-      if (data && data.length > 0) {
-        const latestMap: Record<string, TelemetryPoint> = {};
-        data.forEach((p: any) => {
-          if (!latestMap[p.device_id]) latestMap[p.device_id] = p;
-        });
-        const latestList = Object.values(latestMap);
-        setAllData(latestList);
-        
-        setLastHeard(prev => {
-          const newMap = { ...prev };
-          latestList.forEach(p => { newMap[p.device_id] = p.created_at; });
-          return newMap;
-        });
-
-        if (!selectedDeviceId && latestList.length > 0) {
-          setSelectedDeviceId(latestList[0].device_id);
-        }
-      }
-    }
-    
-    loadLatestPositions();
+    void refetchFleetLatest();
 
     const channel = supabase.channel("live-telemetry")
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "telemetry" }, (payload: { new: TelemetryPoint }) => {
@@ -674,10 +700,18 @@ export default function Dashboard() {
           }
         }
       })
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          console.warn("live-telemetry realtime:", status);
+          void refetchFleetLatest();
+          setHistorySyncNonce((n) => n + 1);
+        }
+      });
 
-    return () => { supabase.removeChannel(channel); };
-  }, [authChecked, assignedDevices, selectedDeviceId, startDate, endDate]);
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [authChecked, assignedDevices, selectedDeviceId, startDate, endDate, refetchFleetLatest]);
 
   // Lazy-load history for selected device (paginate: PostgREST often caps ~1000 rows per request)
   useEffect(() => {
@@ -1282,6 +1316,15 @@ export default function Dashboard() {
                 <X className="w-4 h-4" />
               </button>
               <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 rounded-full bg-slate-800 text-slate-400 hover:text-blue-400"><Sun className="w-4 h-4" /></button>
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="p-2 rounded-full bg-slate-800 text-slate-400 hover:text-cyan-400"
+                title="Reload page (full refresh)"
+                aria-label="Reload page"
+              >
+                <RefreshCw className="w-4 h-4" />
+              </button>
               <button onClick={exportCSV} className="p-2 rounded-full bg-slate-800 text-slate-400 hover:text-emerald-400"><Download className="w-4 h-4" /></button>
               <button onClick={handleSignOut} className="p-2 rounded-full bg-slate-800 text-slate-400 hover:text-red-400"><LogOut className="w-4 h-4" /></button>
             </div>
@@ -2147,9 +2190,25 @@ export default function Dashboard() {
 
       {/* Mobile Hamburger Handle (Visual only, to indicate sidebar can open) */}
       {!isSidebarOpen && (
-        <button onClick={() => setIsSidebarOpen(true)} className="lg:hidden fixed top-4 left-4 z-40 p-3 rounded-full bg-blue-600 text-white shadow-xl shadow-blue-900/30">
-          <Menu className="w-6 h-6" />
-        </button>
+        <>
+          <button
+            type="button"
+            onClick={() => setIsSidebarOpen(true)}
+            className="lg:hidden fixed top-4 left-4 z-40 p-3 rounded-full bg-blue-600 text-white shadow-xl shadow-blue-900/30"
+            aria-label="Open menu"
+          >
+            <Menu className="w-6 h-6" />
+          </button>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="lg:hidden fixed top-4 right-4 z-40 p-3 rounded-full bg-slate-800 text-cyan-400 shadow-xl shadow-black/40 border border-slate-600/80"
+            title="Reload page — fetch latest data"
+            aria-label="Reload page"
+          >
+            <RefreshCw className="w-6 h-6" />
+          </button>
+        </>
       )}
 
     </main>

@@ -1071,45 +1071,108 @@ export default function Map({
     const source = map.getSource("stop-points") as mapboxgl.GeoJSONSource | undefined;
     if (!source) return;
 
-    const STOP_THRESHOLD_MS = 2 * 60 * 1000;
-    /** Same threshold as dashboard stop stats (`page.tsx`). */
+    const MIN_STOP_MS = 2 * 60 * 1000;
     const STOP_SPEED_KMH = 5;
-    /** With the next fix reporting movement: if it is this far away, treat the gap as telemetry offline while driving. */
+    /** Sparse telemetry: gap with next point; skip if next shows driving far away (upload hole). */
     const MAX_STOP_DISPLACEMENT_M = 280;
+    /** Stationary cluster: all points stay within this radius of the first fix (forecourt / parking). */
+    const MAX_CLUSTER_RADIUS_M = 125;
+    /** Still the same physical stop if uploads pause up to this long. */
+    const MAX_INTERNAL_GAP_MS = 6 * 60 * 1000;
+
+    const sortedHistory = [...selectedHistory].sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+    const n = sortedHistory.length;
+
     const features: GeoJSON.Feature<GeoJSON.Point>[] = [];
-    const sortedHistory = [...selectedHistory].sort((a,b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
-    for (let i = 0; i < sortedHistory.length - 1; i++) {
-      const curr = sortedHistory[i], next = sortedHistory[i+1];
-      const gapMs = new Date(next.created_at).getTime() - new Date(curr.created_at).getTime();
-      if (gapMs <= STOP_THRESHOLD_MS) continue;
-      if (curr.speed_kmh >= STOP_SPEED_KMH) continue;
-      const movedM = haversineMeters(curr.lat, curr.lon, next.lat, next.lon);
-      if (next.speed_kmh >= STOP_SPEED_KMH && movedM > MAX_STOP_DISPLACEMENT_M) continue;
-
-      const gapMin = Math.round(gapMs / 60000);
+    const pushStop = (lon: number, lat: number, dwellMs: number, stationary: boolean) => {
+      const gapMin = Math.max(1, Math.round(dwellMs / 60000));
       const label = gapMin >= 60 ? `${Math.floor(gapMin / 60)}h ${gapMin % 60}m` : `${gapMin} min`;
       features.push({
         type: "Feature",
-        properties: { duration_text: `Stopped for ${label}`, label: `P ${label}` },
-        geometry: { type: "Point", coordinates: [curr.lon, curr.lat] },
+        properties: {
+          duration_text: stationary ? `Stationary for ${label}` : `Stopped for ${label}`,
+          label: `P ${label}`,
+        },
+        geometry: { type: "Point", coordinates: [lon, lat] },
       });
+    };
+    let i = 0;
+    while (i < n) {
+      if (Number(sortedHistory[i].speed_kmh) >= STOP_SPEED_KMH) {
+        i++;
+        continue;
+      }
+
+      let end = i;
+      const t0 = new Date(sortedHistory[i].created_at).getTime();
+      const lat0 = Number(sortedHistory[i].lat);
+      const lon0 = Number(sortedHistory[i].lon);
+
+      while (end + 1 < n) {
+        const prev = sortedHistory[end];
+        const next = sortedHistory[end + 1];
+        const dt = new Date(next.created_at).getTime() - new Date(prev.created_at).getTime();
+        if (dt > MAX_INTERNAL_GAP_MS) break;
+        if (Number(next.speed_kmh) >= STOP_SPEED_KMH) break;
+        if (haversineMeters(lat0, lon0, Number(next.lat), Number(next.lon)) > MAX_CLUSTER_RADIUS_M) break;
+        end++;
+      }
+
+      const dwell = new Date(sortedHistory[end].created_at).getTime() - t0;
+
+      if (end > i && dwell >= MIN_STOP_MS) {
+        pushStop(lon0, lat0, dwell, false);
+        i = end + 1;
+        continue;
+      }
+      if (end > i) {
+        i = end + 1;
+        continue;
+      }
+
+      if (i + 1 < n) {
+        const curr = sortedHistory[i];
+        const next = sortedHistory[i + 1];
+        const gapMs = new Date(next.created_at).getTime() - t0;
+        if (gapMs > MIN_STOP_MS && Number(curr.speed_kmh) < STOP_SPEED_KMH) {
+          const movedM = haversineMeters(lat0, lon0, Number(next.lat), Number(next.lon));
+          if (!(Number(next.speed_kmh) >= STOP_SPEED_KMH && movedM > MAX_STOP_DISPLACEMENT_M)) {
+            pushStop(Number(curr.lon), Number(curr.lat), gapMs, false);
+          }
+        }
+      }
+      i++;
     }
 
     if (sortedHistory.length > 0) {
       const latest = sortedHistory[sortedHistory.length - 1];
       const idleMs = Date.now() - new Date(latest.created_at).getTime();
-      if (idleMs > STOP_THRESHOLD_MS && latest.speed_kmh < STOP_SPEED_KMH) {
-        const idleMin = Math.round(idleMs / 60000);
-        const label = idleMin >= 60 ? `${Math.floor(idleMin / 60)}h ${idleMin % 60}m` : `${idleMin} min`;
-        features.push({
-          type: "Feature",
-          properties: { duration_text: `Stationary for ${label}`, label: `P ${label}` },
-          geometry: { type: "Point", coordinates: [latest.lon, latest.lat] },
-        });
+      if (idleMs > MIN_STOP_MS && Number(latest.speed_kmh) < STOP_SPEED_KMH) {
+        pushStop(Number(latest.lon), Number(latest.lat), idleMs, true);
       }
     }
-    source.setData({ type: "FeatureCollection", features });
+
+    /** Drop markers within ~55 m that likely duplicate the same stop (cluster + idle tail). */
+    const deduped: GeoJSON.Feature<GeoJSON.Point>[] = [];
+    const minSepM = 55;
+    for (const f of features) {
+      const coords = f.geometry.coordinates;
+      const [lon, lat] = coords;
+      let tooClose = false;
+      for (const g of deduped) {
+        const [lo2, la2] = g.geometry.coordinates;
+        if (haversineMeters(lat, lon, la2, lo2) < minSepM) {
+          tooClose = true;
+          break;
+        }
+      }
+      if (!tooClose) deduped.push(f);
+    }
+
+    source.setData({ type: "FeatureCollection", features: deduped });
   }, [selectedHistory, mapLoaded]);
 
   useEffect(() => {
