@@ -8,8 +8,8 @@ import {
   Truck, Activity, Map as MapIcon, History, Settings, LogOut, 
   Search, Navigation, Gauge, TrendingUp, MapPin, Map as LucideMap,
   Fuel, Tag, AlertTriangle, Zap, Menu, X, Filter, Download, RotateCcw,
-  Sun, Moon, Calendar, Play, Pause, SkipForward, Clock, Plus, Route,
-  Lock, Unlock, CircleStop
+  Sun, Moon, Calendar,   Play, Pause, SkipForward, Clock, Plus, Route,
+  Lock, Unlock, CircleStop, ChevronDown, ChevronUp
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import SpeedChart from "@/components/SpeedChart";
@@ -277,6 +277,8 @@ export default function Dashboard() {
 
   /** After user taps Go: live panel + traveled km; ETA from Mapbox time scaled by distance left. */
   const [isGoNavigationActive, setIsGoNavigationActive] = useState(false);
+  /** Mobile: compact navigation HUD strip so the map stays visible while driving. */
+  const [navHudCollapsed, setNavHudCollapsed] = useState(false);
   const [navTraveledKm, setNavTraveledKm] = useState(0);
   const navTripLastRef = useRef<{ lat: number; lon: number } | null>(null);
   /** At Go: Mapbox road km, straight km, and drive time — scale remaining → ETA (avoids bogus GPS crawl speed). */
@@ -1027,6 +1029,17 @@ export default function Dashboard() {
     });
     setIsGoNavigationActive(true);
   }, [currentPnt, selectedCoords, etaInfo]);
+
+  /** Mobile: start Go with HUD collapsed for map space; reset when navigation ends. */
+  useEffect(() => {
+    if (!isGoNavigationActive) {
+      setNavHudCollapsed(false);
+      return;
+    }
+    if (typeof window !== "undefined" && window.matchMedia("(max-width: 767px)").matches) {
+      setNavHudCollapsed(true);
+    }
+  }, [isGoNavigationActive]);
 
   const activeDevices = assignedDevices;
 
@@ -1972,20 +1985,60 @@ export default function Dashboard() {
         {/* Live navigation telemetry — left of map */}
         {isGoNavigationActive && currentPnt && selectedCoords && etaInfo && (
           <div
-            className={`absolute left-2 right-auto top-[4.5rem] sm:top-24 z-[998] w-[min(18.5rem,calc(100vw-3rem))] max-h-[min(70vh,calc(100%-8rem))] overflow-y-auto rounded-2xl border p-4 shadow-2xl ${
+            className={`absolute left-2 right-2 top-[4.5rem] sm:top-24 sm:left-2 sm:right-auto z-[998] w-auto sm:w-[min(18.5rem,calc(100vw-3rem))] max-h-[min(70vh,calc(100%-8rem))] overflow-y-auto rounded-2xl border p-3 sm:p-4 shadow-2xl ${
+              navHudCollapsed ? "max-md:max-h-none max-md:overflow-visible" : ""
+            } ${
               isDarkMode
                 ? "border-emerald-500/40 bg-slate-950/95 text-white backdrop-blur-md"
                 : "border-emerald-600/50 bg-white/95 text-slate-900 backdrop-blur-md"
             }`}
           >
-            <p className={`mb-2 text-[9px] leading-snug ${isDarkMode ? "text-slate-500" : "text-slate-600"}`}>
+            {/* Mobile: slim strip — ETA + expand/collapse + Stop */}
+            <div
+              className={`flex md:hidden items-center gap-2 pb-2 mb-2 ${navHudCollapsed ? "" : "border-b border-emerald-500/30"}`}
+            >
+              <button
+                type="button"
+                onClick={() => setNavHudCollapsed((c) => !c)}
+                className={`shrink-0 rounded-lg border p-2 transition ${
+                  isDarkMode
+                    ? "border-slate-600 bg-slate-900/80 text-emerald-400"
+                    : "border-slate-300 bg-slate-100 text-emerald-700"
+                }`}
+                aria-expanded={!navHudCollapsed}
+                title={navHudCollapsed ? "Show navigation details" : "Hide details (more map)"}
+              >
+                {navHudCollapsed ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+              </button>
+              <div className="min-w-0 flex-1">
+                <div className="text-[9px] font-bold uppercase tracking-wide text-emerald-400">Navigation</div>
+                <div className="truncate text-base font-black tabular-nums leading-tight">
+                  {telemetryNavLive?.durationLabel ?? etaInfo.duration}
+                </div>
+                <div className="truncate text-[10px] font-bold tabular-nums opacity-80">
+                  arr {telemetryNavLive?.arrivalTime ?? etaInfo.arrivalTime}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={clearRouteAndNavigation}
+                className="flex shrink-0 items-center gap-1 rounded-lg bg-red-600/90 px-2.5 py-2 text-[10px] font-bold uppercase tracking-wide text-white transition hover:bg-red-500"
+              >
+                <CircleStop className="h-3.5 w-3.5" />
+                Stop
+              </button>
+            </div>
+
+            <p
+              className={`mb-2 text-[9px] leading-snug md:block ${navHudCollapsed ? "max-md:hidden" : "max-md:block"} ${isDarkMode ? "text-slate-500" : "text-slate-600"}`}
+            >
               ETA and arrival use{" "}
               {etaDurationMode === "mapbox"
                 ? "Mapbox Directions time (traffic-aware), scaled by Max Speed in Trip defaults,"
                 : "posted speed limits plus highway/town offsets from Trip defaults,"}{" "}
               then scaled by road distance left — not raw GPS speed.
             </p>
-            <div className="mb-3 flex items-center justify-between gap-2 border-b border-emerald-500/30 pb-2">
+            <div className="mb-3 hidden items-center justify-between gap-2 border-b border-emerald-500/30 pb-2 md:flex">
               <h3 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-emerald-400">
                 <Navigation className="h-4 w-4" />
                 Navigation
@@ -2000,7 +2053,7 @@ export default function Dashboard() {
               </button>
             </div>
 
-            <dl className="flex flex-col gap-3 text-xs">
+            <dl className={`flex flex-col gap-3 text-xs ${navHudCollapsed ? "max-md:hidden" : ""}`}>
               <div>
                 <dt className={isDarkMode ? "text-[10px] font-bold uppercase text-slate-500" : "text-[10px] font-bold uppercase text-slate-600"}>
                   ETA (route profile × distance left)
@@ -2088,6 +2141,7 @@ export default function Dashboard() {
           onMapClick={handleMapDestinationClick}
           isAddingGeofence={isAddingGeofence}
           isDarkMode={isDarkMode}
+          suppressHistoryFitBounds={isGoNavigationActive}
         />
       </div>
 

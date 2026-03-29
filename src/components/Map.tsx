@@ -37,6 +37,8 @@ export interface MapProps {
   onMapClick?: (lat: number, lng: number) => void;
   isAddingGeofence?: boolean;
   isDarkMode?: boolean;
+  /** When true, do not auto fitBounds to full history on each update (e.g. live Go navigation + manual zoom). */
+  suppressHistoryFitBounds?: boolean;
 }
 
 // Must match after every style reload (theme toggle); otherwise trail reverts to solid color or breaks.
@@ -225,6 +227,7 @@ export default function Map({
   onMapClick,
   isAddingGeofence,
   isDarkMode = true,
+  suppressHistoryFitBounds = false,
 }: MapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -899,6 +902,7 @@ export default function Map({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded || playbackPoint) return;
+    if (suppressHistoryFitBounds) return;
     if (selectedHistory.length < 2) return;
 
     const sorted = [...selectedHistory].sort(
@@ -929,7 +933,7 @@ export default function Map({
       ],
       { padding: 56, maxZoom: 15, duration: 900 }
     );
-  }, [selectedHistory, mapLoaded, playbackPoint, selectedDeviceId]);
+  }, [selectedHistory, mapLoaded, playbackPoint, selectedDeviceId, suppressHistoryFitBounds]);
 
   useEffect(() => {
     const map = mapRef.current;
