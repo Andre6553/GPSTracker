@@ -64,6 +64,23 @@ const HISTORY_TRAIL_LINE_PAINT: mapboxgl.LinePaint = {
   "line-opacity": 0.85,
 };
 
+/** Parked ≥ this wall time → violet “long stop” marker (overnight, engine off, multi-hour). */
+const LONG_STOP_MIN_MS = 2 * 60 * 60 * 1000;
+
+const STOP_LAYER_CIRCLE_PAINT: mapboxgl.CirclePaint = {
+  "circle-radius": ["match", ["get", "stop_tier"], "long", 12, 10],
+  "circle-color": ["match", ["get", "stop_tier"], "long", "#7c3aed", "#f59e0b"],
+  "circle-stroke-width": 2,
+  "circle-stroke-color": "#ffffff",
+  "circle-opacity": 0.92,
+};
+
+const STOP_LAYER_LABEL_PAINT: mapboxgl.SymbolPaint = {
+  "text-color": ["match", ["get", "stop_tier"], "long", "#c4b5fd", "#f59e0b"],
+  "text-halo-color": "#0f172a",
+  "text-halo-width": 1.5,
+};
+
 // Generate circle polygon coordinates for geofences
 function createGeoJSONCircle(center: [number, number], radiusKm: number, points = 64): GeoJSON.Feature<GeoJSON.Polygon> {
   const coords: [number, number][] = [];
@@ -391,13 +408,7 @@ export default function Map({
         id: "stop-circles",
         type: "circle",
         source: "stop-points",
-        paint: {
-          "circle-radius": 10,
-          "circle-color": "#f59e0b",
-          "circle-stroke-width": 2,
-          "circle-stroke-color": "#ffffff",
-          "circle-opacity": 0.92,
-        },
+        paint: STOP_LAYER_CIRCLE_PAINT,
       });
       map.addLayer({
         id: "stop-labels",
@@ -409,11 +420,7 @@ export default function Map({
           "text-offset": [0, 2.2],
           "text-anchor": "top",
         },
-        paint: {
-          "text-color": "#f59e0b",
-          "text-halo-color": "#0f172a",
-          "text-halo-width": 1.5,
-        },
+        paint: STOP_LAYER_LABEL_PAINT,
       });
 
       const stopPopup = new mapboxgl.Popup({ closeButton: false, closeOnClick: false });
@@ -422,10 +429,13 @@ export default function Map({
         const feat = e.features?.[0];
         if (!feat) return;
         const coords = (feat.geometry as GeoJSON.Point).coordinates as [number, number];
+        const isLong = feat.properties?.stop_tier === "long";
+        const title = isLong ? "Long stop" : "Parked";
+        const accent = isLong ? "#c4b5fd" : "#f59e0b";
         stopPopup
           .setLngLat(coords)
           .setHTML(`<div style="font-family:system-ui;padding:4px 8px;">
-            <div style="font-weight:700;color:#f59e0b;font-size:13px;">Parked</div>
+            <div style="font-weight:700;color:${accent};font-size:13px;">${title}</div>
             <div style="color:#475569;font-size:12px;">${feat.properties?.duration_text ?? ""}</div>
           </div>`)
           .addTo(map);
@@ -598,13 +608,7 @@ export default function Map({
           id: "stop-circles",
           type: "circle",
           source: "stop-points",
-          paint: {
-            "circle-radius": 10,
-            "circle-color": "#f59e0b",
-            "circle-stroke-width": 2,
-            "circle-stroke-color": "#ffffff",
-            "circle-opacity": 0.92,
-          },
+          paint: STOP_LAYER_CIRCLE_PAINT,
         });
         map.addLayer({
           id: "stop-labels",
@@ -616,11 +620,7 @@ export default function Map({
             "text-offset": [0, 2.2],
             "text-anchor": "top",
           },
-          paint: {
-            "text-color": "#f59e0b",
-            "text-halo-color": "#0f172a",
-            "text-halo-width": 1.5,
-          },
+          paint: STOP_LAYER_LABEL_PAINT,
         });
       }
       setMapLoaded(true);
@@ -1090,9 +1090,11 @@ export default function Map({
     const pushStop = (lon: number, lat: number, dwellMs: number, stationary: boolean) => {
       const gapMin = Math.max(1, Math.round(dwellMs / 60000));
       const label = gapMin >= 60 ? `${Math.floor(gapMin / 60)}h ${gapMin % 60}m` : `${gapMin} min`;
+      const stop_tier = dwellMs >= LONG_STOP_MIN_MS ? "long" : "short";
       features.push({
         type: "Feature",
         properties: {
+          stop_tier,
           duration_text: stationary ? `Stationary for ${label}` : `Stopped for ${label}`,
           label: `P ${label}`,
         },
@@ -1123,9 +1125,27 @@ export default function Map({
 
       const dwell = new Date(sortedHistory[end].created_at).getTime() - t0;
 
-      if (end > i && dwell >= MIN_STOP_MS) {
-        pushStop(lon0, lat0, dwell, false);
-        i = end + 1;
+      /** Long offline gap (e.g. overnight) but next fix is still parked here → count full time to that fix. */
+      let dwellOut = dwell;
+      let nextIndex = end + 1;
+      if (end + 1 < n) {
+        const lastInCluster = sortedHistory[end];
+        const nxt = sortedHistory[end + 1];
+        const gapAfter =
+          new Date(nxt.created_at).getTime() - new Date(lastInCluster.created_at).getTime();
+        if (
+          gapAfter > MAX_INTERNAL_GAP_MS &&
+          Number(nxt.speed_kmh) < STOP_SPEED_KMH &&
+          haversineMeters(lat0, lon0, Number(nxt.lat), Number(nxt.lon)) <= MAX_CLUSTER_RADIUS_M
+        ) {
+          dwellOut = Math.max(dwell, new Date(nxt.created_at).getTime() - t0);
+          nextIndex = end + 2;
+        }
+      }
+
+      if (end > i && dwellOut >= MIN_STOP_MS) {
+        pushStop(lon0, lat0, dwellOut, false);
+        i = nextIndex;
         continue;
       }
       if (end > i) {
