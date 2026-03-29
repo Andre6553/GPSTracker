@@ -81,6 +81,19 @@ function createGeoJSONCircle(center: [number, number], radiusKm: number, points 
   };
 }
 
+/** Great-circle distance in meters (WGS84 sphere). */
+function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const r = 6371000;
+  const p1 = (lat1 * Math.PI) / 180;
+  const p2 = (lat2 * Math.PI) / 180;
+  const dφ = ((lat2 - lat1) * Math.PI) / 180;
+  const dλ = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dφ / 2) * Math.sin(dφ / 2) +
+    Math.cos(p1) * Math.cos(p2) * Math.sin(dλ / 2) * Math.sin(dλ / 2);
+  return 2 * r * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
 const TRAIL_ARROW_IMAGE_ID = "trail-arrow";
 
 /** Points north (up) in canvas space; rotated by `bearing` in symbol layer. */
@@ -1054,27 +1067,34 @@ export default function Map({
     if (!source) return;
 
     const STOP_THRESHOLD_MS = 2 * 60 * 1000;
+    /** Same threshold as dashboard stop stats (`page.tsx`). */
+    const STOP_SPEED_KMH = 5;
+    /** With the next fix reporting movement: if it is this far away, treat the gap as telemetry offline while driving. */
+    const MAX_STOP_DISPLACEMENT_M = 280;
     const features: GeoJSON.Feature<GeoJSON.Point>[] = [];
     const sortedHistory = [...selectedHistory].sort((a,b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
 
     for (let i = 0; i < sortedHistory.length - 1; i++) {
       const curr = sortedHistory[i], next = sortedHistory[i+1];
       const gapMs = new Date(next.created_at).getTime() - new Date(curr.created_at).getTime();
-      if (gapMs >= STOP_THRESHOLD_MS) {
-        const gapMin = Math.round(gapMs / 60000);
-        const label = gapMin >= 60 ? `${Math.floor(gapMin / 60)}h ${gapMin % 60}m` : `${gapMin} min`;
-        features.push({
-          type: "Feature",
-          properties: { duration_text: `Stopped for ${label}`, label: `P ${label}` },
-          geometry: { type: "Point", coordinates: [curr.lon, curr.lat] },
-        });
-      }
+      if (gapMs <= STOP_THRESHOLD_MS) continue;
+      if (curr.speed_kmh >= STOP_SPEED_KMH) continue;
+      const movedM = haversineMeters(curr.lat, curr.lon, next.lat, next.lon);
+      if (next.speed_kmh >= STOP_SPEED_KMH && movedM > MAX_STOP_DISPLACEMENT_M) continue;
+
+      const gapMin = Math.round(gapMs / 60000);
+      const label = gapMin >= 60 ? `${Math.floor(gapMin / 60)}h ${gapMin % 60}m` : `${gapMin} min`;
+      features.push({
+        type: "Feature",
+        properties: { duration_text: `Stopped for ${label}`, label: `P ${label}` },
+        geometry: { type: "Point", coordinates: [curr.lon, curr.lat] },
+      });
     }
 
     if (sortedHistory.length > 0) {
       const latest = sortedHistory[sortedHistory.length - 1];
       const idleMs = Date.now() - new Date(latest.created_at).getTime();
-      if (idleMs > STOP_THRESHOLD_MS) {
+      if (idleMs > STOP_THRESHOLD_MS && latest.speed_kmh < STOP_SPEED_KMH) {
         const idleMin = Math.round(idleMs / 60000);
         const label = idleMin >= 60 ? `${Math.floor(idleMin / 60)}h ${idleMin % 60}m` : `${idleMin} min`;
         features.push({
