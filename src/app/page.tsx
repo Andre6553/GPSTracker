@@ -127,6 +127,60 @@ function parseCoordinateQuery(raw: string): [number, number] | null {
 /** Posted limit at or above this (km/h) is treated as highway/motorway-style for ETA offsets. */
 const ETA_HIGHWAY_POSTED_MIN_KMH = 90;
 
+const ETA_DEFAULT_HIGHWAY_OVER_KMH = 20;
+const ETA_DEFAULT_URBAN_OVER_KMH = 10;
+const ETA_DRIVING_LS_PREFIX = "gpstracker-eta-driving:";
+
+type EtaDurationMode = "mapbox" | "personalized";
+
+const ETA_DEFAULT_DURATION_MODE: EtaDurationMode = "personalized";
+
+function parseEtaDurationMode(v: unknown): EtaDurationMode | null {
+  return v === "mapbox" || v === "personalized" ? v : null;
+}
+
+/** Persists ETA driving offsets and duration mode in the browser (Supabase backup). */
+function readStoredEtaDriving(userId: string): {
+  highway: number | null;
+  urban: number | null;
+  durationMode: EtaDurationMode | null;
+} {
+  if (typeof window === "undefined") {
+    return { highway: null, urban: null, durationMode: null };
+  }
+  try {
+    const raw = localStorage.getItem(ETA_DRIVING_LS_PREFIX + userId);
+    if (!raw) return { highway: null, urban: null, durationMode: null };
+    const o = JSON.parse(raw) as { h?: unknown; u?: unknown; m?: unknown };
+    const highway = Number(o.h);
+    const urban = Number(o.u);
+    return {
+      highway: Number.isFinite(highway) ? highway : null,
+      urban: Number.isFinite(urban) ? urban : null,
+      durationMode: parseEtaDurationMode(o.m),
+    };
+  } catch {
+    return { highway: null, urban: null, durationMode: null };
+  }
+}
+
+function writeStoredEtaDriving(
+  userId: string,
+  highway: number,
+  urban: number,
+  durationMode: EtaDurationMode
+) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(
+      ETA_DRIVING_LS_PREFIX + userId,
+      JSON.stringify({ h: highway, u: urban, m: durationMode })
+    );
+  } catch {
+    /* quota / private mode */
+  }
+}
+
 function maxspeedAnnotationToKmh(m: unknown): { postedKmh: number | null; unlimited: boolean } {
   if (!m || typeof m !== "object") return { postedKmh: null, unlimited: false };
   const o = m as Record<string, unknown>;
@@ -237,8 +291,10 @@ export default function Dashboard() {
   // Speed Alert
   const [speedLimit, setSpeedLimit] = useState(120);
   /** Personalized ETA: km/h over posted limit (Mapbox); segments with limit ≥ ~90 km/h use highway value. */
-  const [etaHighwayOverKmh, setEtaHighwayOverKmh] = useState(20);
-  const [etaUrbanOverKmh, setEtaUrbanOverKmh] = useState(10);
+  const [etaHighwayOverKmh, setEtaHighwayOverKmh] = useState(ETA_DEFAULT_HIGHWAY_OVER_KMH);
+  const [etaUrbanOverKmh, setEtaUrbanOverKmh] = useState(ETA_DEFAULT_URBAN_OVER_KMH);
+  /** Route travel time: Mapbox Directions duration vs recomputed from posted limits + offsets. */
+  const [etaDurationMode, setEtaDurationMode] = useState<EtaDurationMode>(ETA_DEFAULT_DURATION_MODE);
   const [speedAlerts, setSpeedAlerts] = useState<{ time: string; speed: number; lat: number; lon: number }[]>([]);
   const [speedAlertsEnabled, setSpeedAlertsEnabled] = useState(true);
   const [geofenceAlertsEnabled, setGeofenceAlertsEnabled] = useState(true);
@@ -340,6 +396,7 @@ export default function Dashboard() {
         router.push("/login");
       } else {
         setSession(activeSession);
+        lastSavedSettings.current = null;
         // Fetch user's assigned devices
         const { data: deviceRows } = await supabase
           .from("user_devices")
@@ -365,19 +422,49 @@ export default function Dashboard() {
           .eq("user_id", activeSession.user.id)
           .maybeSingle();
 
+        const storedEta = readStoredEtaDriving(activeSession.user.id);
+        let etaH = ETA_DEFAULT_HIGHWAY_OVER_KMH;
+        let etaU = ETA_DEFAULT_URBAN_OVER_KMH;
+        if (
+          settings?.eta_highway_over_limit_kmh != null &&
+          Number.isFinite(Number(settings.eta_highway_over_limit_kmh))
+        ) {
+          etaH = Number(settings.eta_highway_over_limit_kmh);
+        } else if (storedEta.highway != null) {
+          etaH = storedEta.highway;
+        }
+        if (
+          settings?.eta_urban_over_limit_kmh != null &&
+          Number.isFinite(Number(settings.eta_urban_over_limit_kmh))
+        ) {
+          etaU = Number(settings.eta_urban_over_limit_kmh);
+        } else if (storedEta.urban != null) {
+          etaU = storedEta.urban;
+        }
+        let etaMode: EtaDurationMode = ETA_DEFAULT_DURATION_MODE;
+        const fromDbMode = parseEtaDurationMode((settings as { eta_duration_mode?: unknown } | null)?.eta_duration_mode);
+        if (fromDbMode) {
+          etaMode = fromDbMode;
+        } else if (storedEta.durationMode) {
+          etaMode = storedEta.durationMode;
+        }
+        setEtaHighwayOverKmh(etaH);
+        setEtaUrbanOverKmh(etaU);
+        setEtaDurationMode(etaMode);
+        writeStoredEtaDriving(activeSession.user.id, etaH, etaU, etaMode);
+
         if (settings) {
           setSpeedAlertsEnabled(settings.speed_alerts_enabled !== false);
           setGeofenceAlertsEnabled(settings.geofence_alerts_enabled !== false);
           if (settings.fuel_cost) setFuelCost(settings.fuel_cost);
           // Legacy fallback only (single chat id). Primary linkage is now user_telegram_chats.
           if (settings.telegram_chat_id) setTelegramId(String(settings.telegram_chat_id));
-          if (settings.eta_highway_over_limit_kmh != null && Number.isFinite(Number(settings.eta_highway_over_limit_kmh))) {
-            setEtaHighwayOverKmh(Number(settings.eta_highway_over_limit_kmh));
-          }
-          if (settings.eta_urban_over_limit_kmh != null && Number.isFinite(Number(settings.eta_urban_over_limit_kmh))) {
-            setEtaUrbanOverKmh(Number(settings.eta_urban_over_limit_kmh));
-          }
-          lastSavedSettings.current = settings;
+          lastSavedSettings.current = {
+            ...settings,
+            eta_highway_over_limit_kmh: etaH,
+            eta_urban_over_limit_kmh: etaU,
+            eta_duration_mode: etaMode,
+          };
         }
 
         // Load linked Telegram chats (DM + groups)
@@ -397,13 +484,21 @@ export default function Dashboard() {
   useEffect(() => {
     if (!authChecked || !session) return;
 
+    const lastH = Number(lastSavedSettings.current?.eta_highway_over_limit_kmh);
+    const lastU = Number(lastSavedSettings.current?.eta_urban_over_limit_kmh);
+    const cmpH = Number.isFinite(lastH) ? lastH : ETA_DEFAULT_HIGHWAY_OVER_KMH;
+    const cmpU = Number.isFinite(lastU) ? lastU : ETA_DEFAULT_URBAN_OVER_KMH;
+    const cmpMode =
+      parseEtaDurationMode(lastSavedSettings.current?.eta_duration_mode) ?? ETA_DEFAULT_DURATION_MODE;
+
     // Only save if something actually changed from what we last loaded/saved
     if (lastSavedSettings.current &&
         fuelCost === lastSavedSettings.current.fuel_cost &&
         speedAlertsEnabled === (lastSavedSettings.current.speed_alerts_enabled !== false) &&
         geofenceAlertsEnabled === (lastSavedSettings.current.geofence_alerts_enabled !== false) &&
-        etaHighwayOverKmh === Number(lastSavedSettings.current.eta_highway_over_limit_kmh ?? 20) &&
-        etaUrbanOverKmh === Number(lastSavedSettings.current.eta_urban_over_limit_kmh ?? 10)) {
+        etaHighwayOverKmh === cmpH &&
+        etaUrbanOverKmh === cmpU &&
+        etaDurationMode === cmpMode) {
       return;
     }
 
@@ -417,19 +512,34 @@ export default function Dashboard() {
           geofence_alerts_enabled: geofenceAlertsEnabled,
           eta_highway_over_limit_kmh: etaHighwayOverKmh,
           eta_urban_over_limit_kmh: etaUrbanOverKmh,
+          eta_duration_mode: etaDurationMode,
         }, { onConflict: 'user_id' })
         .select()
         .single();
       
       if (!error && data) {
-        lastSavedSettings.current = data;
+        lastSavedSettings.current = {
+          ...data,
+          eta_highway_over_limit_kmh: etaHighwayOverKmh,
+          eta_urban_over_limit_kmh: etaUrbanOverKmh,
+          eta_duration_mode: etaDurationMode,
+        };
+        if (session?.user?.id) {
+          writeStoredEtaDriving(session.user.id, etaHighwayOverKmh, etaUrbanOverKmh, etaDurationMode);
+        }
       } else if (error) {
         console.error("Settings save error:", error);
       }
     }, 2000); // 2s debounce
 
     return () => clearTimeout(timer);
-  }, [fuelCost, speedAlertsEnabled, geofenceAlertsEnabled, etaHighwayOverKmh, etaUrbanOverKmh, session, authChecked]);
+  }, [fuelCost, speedAlertsEnabled, geofenceAlertsEnabled, etaHighwayOverKmh, etaUrbanOverKmh, etaDurationMode, session, authChecked]);
+
+  // Keep ETA prefs in localStorage whenever they change (instant; works even if DB upsert fails).
+  useEffect(() => {
+    if (!authChecked || !session?.user?.id) return;
+    writeStoredEtaDriving(session.user.id, etaHighwayOverKmh, etaUrbanOverKmh, etaDurationMode);
+  }, [etaHighwayOverKmh, etaUrbanOverKmh, etaDurationMode, authChecked, session?.user?.id]);
 
   // PERSISTENCE: Save Device Configs (Speed, Fuel Rate)
   useEffect(() => {
@@ -736,7 +846,7 @@ export default function Dashboard() {
       return;
     }
 
-    const destKey = `${selectedCoords[0].toFixed(5)},${selectedCoords[1].toFixed(5)}|${selectedRouteIndex}|${speedLimit}|h${etaHighwayOverKmh}|u${etaUrbanOverKmh}`;
+    const destKey = `${selectedCoords[0].toFixed(5)},${selectedCoords[1].toFixed(5)}|${selectedRouteIndex}|${speedLimit}|h${etaHighwayOverKmh}|u${etaUrbanOverKmh}|m${etaDurationMode}`;
     const throttle = routeThrottleRef.current;
     const destOrProfileChanged = !throttle || throttle.destKey !== destKey;
 
@@ -767,10 +877,13 @@ export default function Dashboard() {
 
           const routes: RouteEtaInfo[] = json.routes.map((r: any) => {
             const personalized = personalizedRouteDurationSec(r, etaHighwayOverKmh, etaUrbanOverKmh);
+            const mapboxSec = r.duration * speedFactor;
             const adjustedSecRaw =
-              personalized != null && Number.isFinite(personalized) && personalized > 5
-                ? personalized
-                : r.duration * speedFactor;
+              etaDurationMode === "mapbox"
+                ? mapboxSec
+                : personalized != null && Number.isFinite(personalized) && personalized > 5
+                  ? personalized
+                  : mapboxSec;
             const adjustedSec = Math.min(adjustedSecRaw, 48 * 3600);
             return {
               distance: (r.distance / 1000).toFixed(1) + " km",
@@ -804,7 +917,7 @@ export default function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [selectedCoords, currentPnt, selectedRouteIndex, speedLimit, etaHighwayOverKmh, etaUrbanOverKmh]);
+  }, [selectedCoords, currentPnt, selectedRouteIndex, speedLimit, etaHighwayOverKmh, etaUrbanOverKmh, etaDurationMode]);
 
   /** Dropping the route clears Go mode and live stats. */
   useEffect(() => {
@@ -1417,12 +1530,47 @@ export default function Dashboard() {
                     </div>
                     <div className="flex flex-col gap-1.5 col-span-2 border-t border-slate-700/80 pt-3 mt-1">
                       <span className="text-[9px] text-slate-500 uppercase font-bold text-emerald-500/90">
-                        ETA driving style (posted limit +)
+                        Route travel time
                       </span>
                       <p className="text-[9px] text-slate-500 leading-snug">
-                        Mapbox speed limits: segments ≥ ~90 km/h use the first value; lower limits use the second. Example: +20 highway / +10 town.
+                        Choose how ETA and arrival time are computed for the blue route.
                       </p>
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="flex rounded-lg border border-slate-700 overflow-hidden p-0.5 bg-slate-900/80 gap-0.5">
+                        <button
+                          type="button"
+                          onClick={() => setEtaDurationMode("mapbox")}
+                          className={`flex-1 py-2 px-2 text-[10px] font-bold uppercase rounded-md transition-colors ${
+                            etaDurationMode === "mapbox"
+                              ? "bg-emerald-600/30 text-emerald-300 border border-emerald-500/40"
+                              : "text-slate-500 hover:text-slate-300"
+                          }`}
+                        >
+                          Mapbox traffic
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEtaDurationMode("personalized")}
+                          className={`flex-1 py-2 px-2 text-[10px] font-bold uppercase rounded-md transition-colors ${
+                            etaDurationMode === "personalized"
+                              ? "bg-emerald-600/30 text-emerald-300 border border-emerald-500/40"
+                              : "text-slate-500 hover:text-slate-300"
+                          }`}
+                        >
+                          Posted + offsets
+                        </button>
+                      </div>
+                      <p className="text-[9px] text-slate-500 leading-snug">
+                        {etaDurationMode === "mapbox"
+                          ? "Uses Mapbox Directions duration (traffic-aware), scaled by Max Speed above. Usually closest to real door-to-door times."
+                          : "Recalculates from speed-limit annotations: segments ≥ ~90 km/h use highway + km/h; lower limits use town + km/h."}
+                      </p>
+                      <span className="text-[9px] text-slate-500 uppercase font-bold text-emerald-500/90 pt-1">
+                        Offsets (posted limit +) — used in Posted + offsets mode
+                      </span>
+                      <p className="text-[9px] text-slate-500 leading-snug">
+                        Example: +20 highway / +10 town.
+                      </p>
+                      <div className={`grid grid-cols-2 gap-3 transition-opacity ${etaDurationMode === "mapbox" ? "opacity-45" : ""}`}>
                         <div className="flex flex-col gap-1">
                           <span className="text-[9px] text-slate-500 uppercase font-bold">Highway + km/h</span>
                           <div className="flex items-center bg-slate-900 border border-slate-700 rounded-lg px-2 py-1">
@@ -1831,7 +1979,11 @@ export default function Dashboard() {
             }`}
           >
             <p className={`mb-2 text-[9px] leading-snug ${isDarkMode ? "text-slate-500" : "text-slate-600"}`}>
-              ETA and arrival use your personalized route time (posted limits + highway/town offsets from Trip defaults), scaled by road distance left — not raw GPS speed.
+              ETA and arrival use{" "}
+              {etaDurationMode === "mapbox"
+                ? "Mapbox Directions time (traffic-aware), scaled by Max Speed in Trip defaults,"
+                : "posted speed limits plus highway/town offsets from Trip defaults,"}{" "}
+              then scaled by road distance left — not raw GPS speed.
             </p>
             <div className="mb-3 flex items-center justify-between gap-2 border-b border-emerald-500/30 pb-2">
               <h3 className="flex items-center gap-2 text-[11px] font-black uppercase tracking-widest text-emerald-400">

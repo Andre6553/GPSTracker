@@ -45,16 +45,17 @@ const HISTORY_TRAIL_LINE_LAYOUT: mapboxgl.LineLayout = {
   "line-cap": "round",
 };
 
+// Speed bands: blue 0–60, green 60–100, orange 100–130, red 130+ km/h (Mapbox `step` lower-inclusive).
 const HISTORY_TRAIL_LINE_PAINT: mapboxgl.LinePaint = {
   "line-color": [
     "step",
     ["to-number", ["get", "speed_kmh"]],
     "#3b82f6",
-    30,
-    "#10b981",
     60,
-    "#f59e0b",
+    "#10b981",
     100,
+    "#f59e0b",
+    130,
     "#ef4444",
   ],
   "line-width": 5,
