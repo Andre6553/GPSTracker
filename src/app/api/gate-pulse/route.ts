@@ -38,7 +38,7 @@ function sleep(ms: number) {
  * Auth: Authorization: Bearer <GATE_PULSE_SECRET>
  */
 export async function POST(req: NextRequest) {
-  const serverSecret = process.env.GATE_PULSE_SECRET;
+  const serverSecret = process.env.GATE_PULSE_SECRET?.trim();
   if (!serverSecret) {
     return NextResponse.json(
       { ok: false, error: "Server misconfigured: GATE_PULSE_SECRET missing on Vercel" },
