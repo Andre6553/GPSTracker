@@ -1,18 +1,22 @@
 import { createRequire } from "node:module";
+import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-/** `ewelink-api` is CJS (`module.exports`); ESM default import breaks on V/Turbopack → `.login is not a function`. */
+type EwelinkConnection = {
+  at?: string | null;
+  getCredentials(): Promise<unknown>;
+  setDevicePowerState(deviceId: string, state: string, channel?: number): Promise<unknown>;
+};
+
+/** `ewelink-api` is CJS; resolve from project root so Vercel/serverless bundling finds `node_modules`. */
 function getEwelinkConstructor(): new (params: {
   email: string;
   password: string;
   region: string;
-}) => {
-  login(): Promise<unknown>;
-  setDevicePowerState(deviceId: string, state: string, channel?: number): Promise<unknown>;
-} {
-  const require = createRequire(import.meta.url);
+}) => EwelinkConnection {
+  const require = createRequire(path.join(process.cwd(), "package.json"));
   const mod = require("ewelink-api") as { default?: unknown } | (new (...args: unknown[]) => unknown);
   const Ctor = typeof mod === "function" ? mod : (mod as { default: unknown }).default;
   if (typeof Ctor !== "function") {
@@ -22,10 +26,7 @@ function getEwelinkConstructor(): new (params: {
     email: string;
     password: string;
     region: string;
-  }) => {
-    login(): Promise<unknown>;
-    setDevicePowerState(deviceId: string, state: string, channel?: number): Promise<unknown>;
-  };
+  }) => EwelinkConnection;
 }
 
 function sleep(ms: number) {
@@ -68,7 +69,15 @@ export async function POST(req: NextRequest) {
   try {
     const Ewelink = getEwelinkConstructor();
     const connection = new Ewelink({ email, password, region });
-    await connection.login();
+    // v3.1.1 uses `getCredentials()` for login, not `login()` (typings are wrong).
+    const credResult = await connection.getCredentials();
+    if (!connection.at) {
+      const o = (credResult && typeof credResult === "object" ? credResult : {}) as {
+        msg?: string;
+        error?: unknown;
+      };
+      throw new Error(o.msg ? String(o.msg) : String(o.error ?? "eWeLink getCredentials failed (no token)"));
+    }
     await connection.setDevicePowerState(deviceId, "on");
     await sleep(pulseMs);
     await connection.setDevicePowerState(deviceId, "off");
