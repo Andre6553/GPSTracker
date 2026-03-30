@@ -1,6 +1,6 @@
-import { createRequire } from "node:module";
-import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
+// Static import so Next/Vercel file tracing includes `ewelink-api` (dynamic require() was omitted from `/var/task`).
+import eWelinkMod from "ewelink-api";
 
 export const runtime = "nodejs";
 
@@ -10,14 +10,12 @@ type EwelinkConnection = {
   setDevicePowerState(deviceId: string, state: string, channel?: number): Promise<unknown>;
 };
 
-/** `ewelink-api` is CJS; resolve from project root so Vercel/serverless bundling finds `node_modules`. */
 function getEwelinkConstructor(): new (params: {
   email: string;
   password: string;
   region: string;
 }) => EwelinkConnection {
-  const require = createRequire(path.join(process.cwd(), "package.json"));
-  const mod = require("ewelink-api") as { default?: unknown } | (new (...args: unknown[]) => unknown);
+  const mod = eWelinkMod as unknown as { default?: unknown } | (new (...args: unknown[]) => unknown);
   const Ctor = typeof mod === "function" ? mod : (mod as { default: unknown }).default;
   if (typeof Ctor !== "function") {
     throw new Error("ewelink-api: invalid export (expected class constructor)");
@@ -69,7 +67,6 @@ export async function POST(req: NextRequest) {
   try {
     const Ewelink = getEwelinkConstructor();
     const connection = new Ewelink({ email, password, region });
-    // v3.1.1 uses `getCredentials()` for login, not `login()` (typings are wrong).
     const credResult = await connection.getCredentials();
     if (!connection.at) {
       const o = (credResult && typeof credResult === "object" ? credResult : {}) as {
