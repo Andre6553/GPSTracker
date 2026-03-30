@@ -70,6 +70,31 @@ body {
   background: var(--accent-strong);
 }
 
+.sidebar-shell {
+  background: linear-gradient(
+    180deg,
+    rgba(15, 23, 42, 0.96) 0%,
+    rgba(15, 23, 42, 0.92) 55%,
+    rgba(15, 23, 42, 0.9) 100%
+  );
+  border-right: 1px solid rgba(71, 85, 105, 0.7);
+  backdrop-filter: blur(14px);
+  box-shadow: 8px 0 30px rgba(2, 6, 23, 0.38);
+}
+
+.tabs-shell {
+  background: rgba(30, 41, 59, 0.75);
+  border: 1px solid rgba(71, 85, 105, 0.55);
+  border-radius: 0.75rem;
+  padding: 0.375rem;
+}
+
+.tab-pill-active {
+  background: linear-gradient(135deg, #2563eb, #0ea5e9);
+  color: #ffffff;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.35);
+}
+
 ::-webkit-scrollbar {
   width: 5px;
 }

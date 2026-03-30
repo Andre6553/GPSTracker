@@ -1298,7 +1298,7 @@ export default function Dashboard() {
     <main className="flex h-[100dvh] w-full bg-slate-950 text-slate-200 overflow-hidden">
       
       {/* Sidebar Dashboard */}
-      <div className={`fixed inset-y-0 left-0 z-50 w-80 bg-slate-900 border-r border-slate-800 transition-transform lg:relative lg:translate-x-0 lg:flex lg:w-1/3 lg:min-w-[340px] lg:max-w-[420px] ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"}`}>
+      <div className={`sidebar-shell fixed inset-y-0 left-0 z-50 w-80 transition-transform lg:relative lg:translate-x-0 lg:flex lg:w-1/3 lg:min-w-[340px] lg:max-w-[420px] ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"}`}>
         <div className="flex flex-col h-full w-full p-5 gap-4 overflow-y-auto">
           
           {/* Header */}
@@ -1429,9 +1429,9 @@ export default function Dashboard() {
           </div>
 
           {/* Tabs */}
-          <div className="flex gap-1 bg-slate-800/60 p-1 rounded-lg">
+          <div className="tabs-shell flex gap-1">
             {[{ key: "live", label: "Live", icon: <Zap className="w-3.5 h-3.5" /> }, { key: "history", label: "History", icon: <Calendar className="w-3.5 h-3.5" /> }, { key: "geofences", label: "Zones", icon: <MapPin className="w-3.5 h-3.5" /> }, { key: "alerts", label: "Alerts", icon: <AlertTriangle className="w-3.5 h-3.5" /> }, { key: "devices", label: "Devices", icon: <Settings className="w-3.5 h-3.5" /> }].map(tab => (
-              <button key={tab.key} onClick={() => setActiveTab(tab.key as any)} className={`flex-1 py-1.5 text-xs font-semibold rounded-md flex items-center justify-center gap-1.5 transition ${activeTab === tab.key ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}>
+              <button key={tab.key} onClick={() => setActiveTab(tab.key as any)} className={`flex-1 py-1.5 text-xs font-semibold rounded-md flex items-center justify-center gap-1.5 transition ${activeTab === tab.key ? 'tab-pill-active' : 'text-slate-300 hover:text-white hover:bg-slate-700/50'}`}>
                 {tab.icon} <span>{tab.label}</span>
               </button>
             ))}

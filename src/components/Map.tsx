@@ -1289,17 +1289,17 @@ export default function Map({
       <div className="absolute bottom-6 right-4 lg:bottom-6 lg:right-6 z-10 flex flex-col gap-2">
         <button
           onClick={() => setShowTraffic(t => !t)}
-          className={`p-2 rounded-lg shadow-lg border transition-all active:scale-95 text-[10px] font-bold ${showTraffic ? "bg-amber-500 border-amber-400 text-white" : "bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700"}`}
+          className={`rounded-lg border transition-all active:scale-95 text-[10px] font-bold px-2.5 py-2 ${showTraffic ? "bg-amber-500 border-amber-400 text-white shadow-lg shadow-amber-900/40" : "app-surface text-slate-200 hover:bg-slate-700/80"}`}
         >
           LIVE TRAFFIC
         </button>
         {hasCarPos && (
-          <button onClick={flyToCar} className="bg-blue-600 text-white p-3 rounded-full shadow-lg border border-blue-500 hover:bg-blue-500 transition-transform active:scale-95">
+          <button onClick={flyToCar} className="mobile-action-btn mobile-action-btn-primary">
             <Crosshair className="w-5 h-5" />
           </button>
         )}
         {hasDestPos && (
-          <button onClick={flyToDestination} className="bg-emerald-600 text-white p-3 rounded-full shadow-lg border border-emerald-500 hover:bg-emerald-500 transition-transform active:scale-95">
+          <button onClick={flyToDestination} className="mobile-action-btn bg-emerald-600 text-white border-emerald-500 hover:bg-emerald-500">
             <MapPin className="w-5 h-5" />
           </button>
         )}
