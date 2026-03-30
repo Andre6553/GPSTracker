@@ -14,6 +14,8 @@ function getEwelinkConstructor(): new (params: {
   email: string;
   password: string;
   region: string;
+  APP_ID?: string;
+  APP_SECRET?: string;
 }) => EwelinkConnection {
   const mod = eWelinkMod as unknown as { default?: unknown } | (new (...args: unknown[]) => unknown);
   const Ctor = typeof mod === "function" ? mod : (mod as { default: unknown }).default;
@@ -24,6 +26,8 @@ function getEwelinkConstructor(): new (params: {
     email: string;
     password: string;
     region: string;
+    APP_ID?: string;
+    APP_SECRET?: string;
   }) => EwelinkConnection;
 }
 
@@ -56,6 +60,8 @@ export async function POST(req: NextRequest) {
   const region = process.env.EWELINK_REGION ?? "eu";
   const deviceId = process.env.SONOFF_DEVICE_ID;
   const pulseMs = Number(process.env.PULSE_MS ?? "700");
+  const appId = process.env.EWELINK_APP_ID?.trim();
+  const appSecret = process.env.EWELINK_APP_SECRET?.trim();
 
   if (!email || !password || !deviceId) {
     return NextResponse.json(
@@ -64,9 +70,20 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  if (!appId || !appSecret) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          "CoolKit no longer accepts the default ewelink-api app id. Add EWELINK_APP_ID and EWELINK_APP_SECRET from the eWeLink developer console (e.g. https://dev.ewelink.cc/ ), then redeploy.",
+      },
+      { status: 500 }
+    );
+  }
+
   try {
     const Ewelink = getEwelinkConstructor();
-    const connection = new Ewelink({ email, password, region });
+    const connection = new Ewelink({ email, password, region, APP_ID: appId, APP_SECRET: appSecret });
     const credResult = await connection.getCredentials();
     if (!connection.at) {
       const o = (credResult && typeof credResult === "object" ? credResult : {}) as {
