@@ -13,10 +13,42 @@ interface TelemetryPayload {
   speed_kmh: number;
 }
 
+type GateStatus = 'HOME' | 'AWAY_PENDING' | 'AWAY_CONFIRMED' | 'RETURNING' | 'TRIGGERED_COOLDOWN';
+
+interface GateStateRow {
+  user_id: string;
+  device_id: string;
+  status: GateStatus;
+  outside_since: string | null;
+  driving_since: string | null;
+  inside_streak: number;
+  last_distance_m: number | null;
+  last_trigger_at: string | null;
+  cooldown_until: string | null;
+}
+
+const HOME_LAT = Number(Deno.env.get('HOME_LAT') ?? '-34.140104');
+const HOME_LON = Number(Deno.env.get('HOME_LON') ?? '22.092554');
+const INNER_RADIUS_M = Number(Deno.env.get('INNER_RADIUS_M') ?? '100');
+const OUTER_RADIUS_M = Number(Deno.env.get('OUTER_RADIUS_M') ?? '350');
+const MIN_DRIVE_SPEED_KMH = Number(Deno.env.get('MIN_DRIVE_SPEED_KMH') ?? '12');
+const MIN_OUTSIDE_SEC = Number(Deno.env.get('MIN_OUTSIDE_SEC') ?? '300');
+const MIN_DRIVE_SEC = Number(Deno.env.get('MIN_DRIVE_SEC') ?? '30');
+const ENTRY_CONFIRM_POINTS = Number(Deno.env.get('ENTRY_CONFIRM_POINTS') ?? '3');
+const COOLDOWN_SEC = Number(Deno.env.get('COOLDOWN_SEC') ?? '900');
+const TRIGGER_DEVICE_ID = Deno.env.get('TRIGGER_DEVICE_ID') ?? 'Andre';
+/** Node/Vercel route runs ewelink-api; Deno cannot load that npm package. */
+const GATE_PULSE_URL = Deno.env.get('GATE_PULSE_URL') ?? '';
+const GATE_PULSE_SECRET = Deno.env.get('GATE_PULSE_SECRET') ?? '';
+const GATE_RETRIES = Number(Deno.env.get('GATE_RETRIES') ?? '2');
+const GATE_RETRY_DELAY_MS = Number(Deno.env.get('GATE_RETRY_DELAY_MS') ?? '2000');
+const GATE_AUTOMATION_ENABLED = (Deno.env.get('GATE_AUTOMATION_ENABLED') ?? 'true') === 'true';
+
 Deno.serve(async (req: Request) => {
   try {
     const payload = await req.json();
     const { device_id, lat, lon, speed_kmh } = payload.record as TelemetryPayload;
+    console.log("telegram-alerts hit", device_id, lat, lon, speed_kmh);
 
     // 1. Find the owner and their settings
     const { data: deviceOwner } = await supabase
@@ -90,6 +122,18 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // 4. GATE AUTOMATION (reliable arrival detection)
+    if (GATE_AUTOMATION_ENABLED && device_id === TRIGGER_DEVICE_ID) {
+      await processGateAutomation({
+        userId: deviceOwner.user_id,
+        deviceId: device_id,
+        lat,
+        lon,
+        speedKmh: speed_kmh,
+        chatId: chat_id,
+      });
+    }
+
     return new Response('OK');
   } catch (err) {
     console.error(err);
@@ -104,6 +148,182 @@ async function sendTelegram(chatId: string, text: string) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' })
   });
+}
+
+async function processGateAutomation(params: {
+  userId: string;
+  deviceId: string;
+  lat: number;
+  lon: number;
+  speedKmh: number;
+  chatId: string;
+}) {
+  const { userId, deviceId, lat, lon, speedKmh, chatId } = params;
+  const now = new Date();
+  const distM = haversineKm(lat, lon, HOME_LAT, HOME_LON) * 1000;
+  const isInsideInner = distM <= INNER_RADIUS_M;
+  const isOutsideOuter = distM > OUTER_RADIUS_M;
+  const isDriving = speedKmh >= MIN_DRIVE_SPEED_KMH;
+
+  const { data: row } = await supabase
+    .from('device_gate_state')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('device_id', deviceId)
+    .maybeSingle();
+
+  const state: GateStateRow = row ?? {
+    user_id: userId,
+    device_id: deviceId,
+    status: 'HOME',
+    outside_since: null,
+    driving_since: null,
+    inside_streak: 0,
+    last_distance_m: null,
+    last_trigger_at: null,
+    cooldown_until: null,
+  };
+
+  const inCooldown = !!state.cooldown_until && now < new Date(state.cooldown_until);
+  if (inCooldown) {
+    state.status = 'TRIGGERED_COOLDOWN';
+    state.last_distance_m = distM;
+    state.inside_streak = isInsideInner ? Math.min(state.inside_streak + 1, ENTRY_CONFIRM_POINTS) : 0;
+    await saveGateState(state);
+    return;
+  }
+
+  if (state.status === 'TRIGGERED_COOLDOWN' && !inCooldown) {
+    state.status = isInsideInner ? 'HOME' : 'AWAY_PENDING';
+  }
+
+  if (isOutsideOuter) {
+    if (!state.outside_since) state.outside_since = now.toISOString();
+    if (isDriving) {
+      if (!state.driving_since) state.driving_since = now.toISOString();
+    } else {
+      state.driving_since = null;
+    }
+
+    const outsideSec = state.outside_since ? elapsedSeconds(state.outside_since, now) : 0;
+    const drivingSec = state.driving_since ? elapsedSeconds(state.driving_since, now) : 0;
+    state.status = outsideSec >= MIN_OUTSIDE_SEC && drivingSec >= MIN_DRIVE_SEC
+      ? 'AWAY_CONFIRMED'
+      : 'AWAY_PENDING';
+    state.inside_streak = 0;
+  } else if (state.status === 'AWAY_PENDING' && !isInsideInner) {
+    // Between inner and outer radius, keep pending and wait for clear movement context.
+    state.inside_streak = 0;
+  }
+
+  if ((state.status === 'AWAY_CONFIRMED' || state.status === 'RETURNING') && !isInsideInner) {
+    if (isDriving && state.last_distance_m !== null && distM < state.last_distance_m - 5) {
+      state.status = 'RETURNING';
+    }
+  }
+
+  let triggered = false;
+  if ((state.status === 'AWAY_CONFIRMED' || state.status === 'RETURNING') && isInsideInner) {
+    state.inside_streak += 1;
+    if (state.inside_streak >= ENTRY_CONFIRM_POINTS) {
+      const gateResult = await triggerSonoffGatePulse();
+      if (gateResult.ok) {
+        triggered = true;
+        state.last_trigger_at = now.toISOString();
+        state.cooldown_until = new Date(now.getTime() + COOLDOWN_SEC * 1000).toISOString();
+        state.status = 'TRIGGERED_COOLDOWN';
+        state.outside_since = null;
+        state.driving_since = null;
+        await sendTelegram(
+          chatId,
+          `🚪 *Gate Opened*\nDevice: *${deviceId}*\nDistance: ${distM.toFixed(0)}m\nSpeed: ${speedKmh.toFixed(1)} km/h`
+        );
+      } else {
+        await sendTelegram(
+          chatId,
+          `⚠️ *Gate trigger failed*\nDevice: *${deviceId}*\nReason: ${gateResult.error}`
+        );
+      }
+    }
+  } else if (isInsideInner) {
+    state.status = 'HOME';
+    state.inside_streak = Math.min(state.inside_streak + 1, ENTRY_CONFIRM_POINTS);
+  } else {
+    state.inside_streak = 0;
+  }
+
+  if (!triggered && state.status === 'RETURNING' && !isDriving && !isInsideInner) {
+    // Pause return flow if movement stops far from home.
+    state.status = 'AWAY_CONFIRMED';
+  }
+
+  state.last_distance_m = distM;
+  await saveGateState(state);
+}
+
+async function saveGateState(state: GateStateRow) {
+  await supabase.from('device_gate_state').upsert({
+    user_id: state.user_id,
+    device_id: state.device_id,
+    status: state.status,
+    outside_since: state.outside_since,
+    driving_since: state.driving_since,
+    inside_streak: state.inside_streak,
+    last_distance_m: state.last_distance_m,
+    last_trigger_at: state.last_trigger_at,
+    cooldown_until: state.cooldown_until,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'user_id,device_id' });
+}
+
+async function triggerSonoffGatePulse(): Promise<{ ok: boolean; error?: string }> {
+  if (!GATE_PULSE_URL || !GATE_PULSE_SECRET) {
+    return { ok: false, error: 'Set GATE_PULSE_URL and GATE_PULSE_SECRET (Node gate-pulse API)' };
+  }
+
+  for (let attempt = 1; attempt <= GATE_RETRIES + 1; attempt++) {
+    try {
+      const res = await fetch(GATE_PULSE_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${GATE_PULSE_SECRET}`,
+        },
+        body: JSON.stringify({}),
+      });
+      const text = await res.text();
+      let data: { ok?: boolean; error?: string } = {};
+      try {
+        data = JSON.parse(text) as { ok?: boolean; error?: string };
+      } catch {
+        /* plain text error */
+      }
+      if (res.ok && data.ok === true) {
+        return { ok: true };
+      }
+      const errText = data.error || text || `HTTP ${res.status}`;
+      if (attempt > GATE_RETRIES) {
+        return { ok: false, error: errText };
+      }
+      await sleep(GATE_RETRY_DELAY_MS);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (attempt > GATE_RETRIES) {
+        return { ok: false, error: msg };
+      }
+      await sleep(GATE_RETRY_DELAY_MS);
+    }
+  }
+  return { ok: false, error: 'Unknown failure' };
+}
+
+function elapsedSeconds(iso: string, now: Date): number {
+  const t = new Date(iso).getTime();
+  return Math.max(0, Math.floor((now.getTime() - t) / 1000));
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number) {
