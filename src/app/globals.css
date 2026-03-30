@@ -8,6 +8,11 @@
 :root {
   --background: #0f172a; /* Slate 900 */
   --foreground: #f8fafc; /* Slate 50 */
+  --surface: rgba(15, 23, 42, 0.88);
+  --surface-border: rgba(71, 85, 105, 0.65);
+  --surface-shadow: 0 10px 30px rgba(2, 6, 23, 0.45);
+  --accent: #3b82f6;
+  --accent-strong: #2563eb;
 }
 
 body {
@@ -25,6 +30,44 @@ body {
 
 .animate-pulse-red {
   animation: pulse-red 2s infinite;
+}
+
+.app-surface {
+  background: var(--surface);
+  border: 1px solid var(--surface-border);
+  box-shadow: var(--surface-shadow);
+  backdrop-filter: blur(12px);
+}
+
+.mobile-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  padding: 0.75rem;
+  border: 1px solid rgba(71, 85, 105, 0.8);
+  background: rgba(15, 23, 42, 0.9);
+  color: #e2e8f0;
+  box-shadow: 0 12px 24px rgba(2, 6, 23, 0.45);
+  transition: transform 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+
+.mobile-action-btn:hover {
+  background: rgba(30, 41, 59, 0.95);
+}
+
+.mobile-action-btn:active {
+  transform: scale(0.98);
+}
+
+.mobile-action-btn-primary {
+  background: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 70%, white 30%);
+  color: #ffffff;
+}
+
+.mobile-action-btn-primary:hover {
+  background: var(--accent-strong);
 }
 
 ::-webkit-scrollbar {
@@ -56,6 +99,11 @@ body {
   .mobile-map-safe .mapboxgl-ctrl-top-right {
     /* Move Mapbox +/- controls below centered search bar on portrait mobile. */
     top: 5.25rem !important;
+  }
+
+  .mobile-action-cluster {
+    display: flex;
+    gap: 0.5rem;
   }
 }
 

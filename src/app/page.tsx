@@ -1917,7 +1917,7 @@ export default function Dashboard() {
       <div className={`flex-1 p-2 lg:p-4 relative h-full ${isDarkMode ? 'bg-slate-950' : 'bg-slate-200'}`}>
         
         {/* Floating Search Bar */}
-        <div className="mobile-search-safe pointer-events-none absolute top-6 left-1/2 -translate-x-1/2 z-20 lg:z-[1000] w-full max-w-md px-4">
+        <div className="mobile-search-safe pointer-events-none absolute top-5 left-1/2 -translate-x-1/2 z-20 lg:z-[1000] w-full max-w-md px-4">
           <div className="relative group pointer-events-auto">
             <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none">
               <Search className="w-4 h-4 text-slate-400 group-focus-within:text-blue-500 transition-colors" />
@@ -1983,7 +1983,7 @@ export default function Dashboard() {
                   setSuggestions([]);
                 }
               }}
-              className="w-full bg-slate-900/90 backdrop-blur-md border border-slate-700/50 rounded-2xl pl-11 pr-4 py-3.5 text-sm text-white shadow-2xl shadow-black/50 focus:outline-none focus:border-blue-500/50 transition-all"
+              className="w-full app-surface rounded-2xl pl-11 pr-4 py-3.5 text-sm text-white focus:outline-none focus:border-blue-500/50 transition-all"
             />
             {showSuggestions && suggestions.length > 0 && (
               <div className="absolute top-full left-0 right-0 mt-2 bg-slate-900/95 backdrop-blur-xl border border-slate-800 rounded-xl overflow-hidden shadow-2xl z-[1001] animate-in fade-in slide-in-from-top-2 duration-200">
@@ -2013,7 +2013,7 @@ export default function Dashboard() {
           currentPnt &&
           !isGoNavigationActive &&
           !isRouting && (
-            <div className="pointer-events-none absolute top-[5.25rem] sm:top-24 left-1/2 -translate-x-1/2 z-[999] flex justify-center px-4 w-full max-w-md">
+            <div className="pointer-events-none absolute top-[5.75rem] sm:top-24 left-1/2 -translate-x-1/2 z-[999] flex justify-center px-4 w-full max-w-md">
               <button
                 type="button"
                 onClick={startGoNavigation}
@@ -2194,7 +2194,7 @@ export default function Dashboard() {
           <button
             type="button"
             onClick={() => setIsSidebarOpen(true)}
-            className="lg:hidden fixed top-4 left-4 z-40 p-3 rounded-full bg-blue-600 text-white shadow-xl shadow-blue-900/30"
+            className="lg:hidden fixed top-4 left-4 z-40 mobile-action-btn mobile-action-btn-primary"
             aria-label="Open menu"
           >
             <Menu className="w-6 h-6" />
@@ -2202,7 +2202,7 @@ export default function Dashboard() {
           <button
             type="button"
             onClick={() => window.location.reload()}
-            className="lg:hidden fixed top-4 right-4 z-40 p-3 rounded-full bg-slate-800 text-cyan-400 shadow-xl shadow-black/40 border border-slate-600/80"
+            className="lg:hidden fixed top-4 right-4 z-40 mobile-action-btn text-cyan-400"
             title="Reload page — fetch latest data"
             aria-label="Reload page"
           >
