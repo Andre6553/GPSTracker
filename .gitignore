@@ -42,3 +42,6 @@ next-env.d.ts
 
 # arduino secrets
 secrets.h
+
+# local HA deploy copy (may contain API keys)
+homeassistant/configuration.yaml
