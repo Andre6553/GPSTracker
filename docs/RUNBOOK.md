@@ -16,6 +16,41 @@ Ensure the **database webhook** on `telemetry` (or relevant table) invokes `tele
 
 Deploy from your normal Vercel workflow; confirm env vars mirror local needs (`TELEGRAM_BOT_TOKEN`, Supabase URL keys, Adafruit credentials as used by `src/app/api/webhook/telegram/route.ts`).
 
+### `/trigger_gate_*` without eWeLink developer (CoolKit) keys
+
+Cloud gate pulse uses `ewelink-api`, which requires `EWELINK_APP_ID` / `EWELINK_APP_SECRET` from the [eWeLink developer console](https://dev.ewelink.cc/). If you do not have those yet, point Telegram at **Home Assistant** instead:
+
+1. On Home Assistant, add an automation (or merge into `automations.yaml`) with a **webhook** trigger and the **same** action you use to pulse the gate (e.g. momentary switch / relay).
+
+```yaml
+automation:
+  - alias: "Telegram manual gate pulse (webhook)"
+    id: telegram_gate_webhook
+    trigger:
+      - platform: webhook
+        webhook_id: YOUR_LONG_RANDOM_SECRET
+        local_only: false
+    action:
+      # Reuse whatever you already use for the gate — example:
+      - service: switch.turn_on
+        target:
+          entity_id: switch.your_gate_relay
+      - delay: "00:00:00.7"
+      - service: switch.turn_off
+        target:
+          entity_id: switch.your_gate_relay
+```
+
+2. **Public URL** so Vercel can reach HA: [Nabu Casa](https://www.nabucasa.com/), [Tailscale Funnel](https://tailscale.com/kb/1223/funnel/), or [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/) to your HA instance. The webhook URL looks like:
+
+   `https://<your-ha-host>/api/webhook/YOUR_LONG_RANDOM_SECRET`
+
+3. Set on **Vercel** (and optionally `.env.local`):
+
+   `HOME_ASSISTANT_GATE_WEBHOOK_URL` = that full URL (HTTPS).
+
+Redeploy. Then `/trigger_gate_andre` will **POST** to HA instead of calling eWeLink on Vercel. Automatic arrival flow is unchanged (Supabase → HA polling `device_gate_state`).
+
 ### Telegram webhook stuck / conflict
 
 Only one integration may call `getUpdates` on the bot. Home Assistant must **not** use the Telegram polling integration for this bot if Vercel uses `setWebhook`.

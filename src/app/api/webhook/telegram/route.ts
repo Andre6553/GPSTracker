@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { createClient } from "@supabase/supabase-js";
-import { executeGatePulseFromEnv } from "@/lib/gate-pulse-ewelink";
+import { executeGatePulseFlexible } from "@/lib/pulse-gate";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const DEBUG_LOG_ENDPOINT =
@@ -415,8 +415,8 @@ export async function POST(req: NextRequest) {
         if (!matchedDevice) {
           await sendTelegram(chatId, "⚠️ No linked device matches that gate command.");
         } else {
-          // Same eWeLink pulse as `/api/gate-pulse` — in-process (no self-fetch on Vercel).
-          const result = await executeGatePulseFromEnv();
+          // HA webhook if HOME_ASSISTANT_GATE_WEBHOOK_URL set; else eWeLink (needs APP_ID / APP_SECRET).
+          const result = await executeGatePulseFlexible();
           if (result.ok) {
             await sendTelegram(chatId, `✅ <b>Gate pulse sent</b>\nDevice: <code>${matchedDevice}</code>`);
           } else {
