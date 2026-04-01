@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { createClient } from "@supabase/supabase-js";
+import { executeGatePulseFromEnv } from "@/lib/gate-pulse-ewelink";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const DEBUG_LOG_ENDPOINT =
@@ -21,6 +22,11 @@ function normalizeTelegramCommand(raw: string): string {
   if (!t.startsWith("/")) return t;
   const at = t.indexOf("@");
   return at > 0 ? t.slice(0, at) : t;
+}
+
+/** Same normalization as `telegram-alerts` edge function (`/trigger_gate_<slug>`). */
+function gateTriggerSlug(deviceId: string): string {
+  return deviceId.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 async function resolveUserIdForChat(client: any, chatId: string): Promise<string | null> {
@@ -380,8 +386,44 @@ export async function POST(req: NextRequest) {
 /killoff - Remotely enable vehicle
 /status - Check alert settings
 /groupid - Get Chat ID for dashboard
+/trigger_gate_<i>device</i> - Pulse gate (linked device slug, e.g. <code>/trigger_gate_andre</code>)
 /help - Show this menu`;
       await sendTelegram(chatId, helpMsg);
+    }
+    else if (text.startsWith("/trigger_gate_")) {
+      const slug = text.slice("/trigger_gate_".length).trim();
+      const client = supabaseService ?? supabase;
+      const userId = await resolveUserIdForChat(client, chatId);
+      const adminChatId = process.env.NEXT_PUBLIC_TELEGRAM_CHAT_ID?.trim() || "1519716896";
+      const isAdmin = chatId === adminChatId;
+
+      if (!slug) {
+        await sendTelegram(chatId, "⚠️ Use <code>/trigger_gate_</code> plus your device slug (see <code>/whoami</code>).");
+      } else if (!userId && !isAdmin) {
+        await sendTelegram(chatId, "⚠️ <b>No devices linked</b> for this Telegram chat.");
+      } else {
+        let matchedDevice: string | null = null;
+        if (userId) {
+          const { data: devices } = await client.from("user_devices").select("device_id").eq("user_id", userId);
+          const ids = (devices ?? []).map((d: { device_id: string }) => String(d.device_id));
+          matchedDevice = ids.find((id) => gateTriggerSlug(id) === slug) ?? null;
+        }
+        const fallbackId = process.env.TRIGGER_DEVICE_ID?.trim() || "Andre";
+        if (!matchedDevice && isAdmin && gateTriggerSlug(fallbackId) === slug) {
+          matchedDevice = fallbackId;
+        }
+        if (!matchedDevice) {
+          await sendTelegram(chatId, "⚠️ No linked device matches that gate command.");
+        } else {
+          // Same eWeLink pulse as `/api/gate-pulse` — in-process (no self-fetch on Vercel).
+          const result = await executeGatePulseFromEnv();
+          if (result.ok) {
+            await sendTelegram(chatId, `✅ <b>Gate pulse sent</b>\nDevice: <code>${matchedDevice}</code>`);
+          } else {
+            await sendTelegram(chatId, `❌ <b>Gate pulse failed</b>\n<code>${result.error}</code>`);
+          }
+        }
+      }
     }
     // Kill Switch Flow Starting Point
     else if (text === "/killon" || text === "/killoff") {
