@@ -1,0 +1,72 @@
+# Deploy: scp to NUC /tmp then:
+#   sudo cp /tmp/automations.yaml.new /var/lib/homeassistant/homeassistant/automations.yaml
+# In HA: Developer tools → YAML → Reload automations (or restart Core).
+#
+# Vercel: set HOME_ASSISTANT_GATE_WEBHOOK_URL to your public HA base + path below.
+
+- id: trigger_gate_from_telegram_arrival
+  alias: Geofence Gate Arrival Trigger
+  trigger:
+    - platform: state
+      entity_id: sensor.andre_gate_status
+      to: "TRIGGERED_COOLDOWN"
+  action:
+    - service: switch.turn_on
+      target:
+        entity_id: switch.sonoff_1001dd6335
+    - delay: "00:00:00.700"
+    - service: switch.turn_off
+      target:
+        entity_id: switch.sonoff_1001dd6335
+  mode: single
+
+# Public URL (HTTPS) must reach Home Assistant, e.g. Nabu Casa / Cloudflare Tunnel:
+#   https://<your-ha>/api/webhook/vercel_gate_v1_a8f3c91d
+- id: telegram_gate_webhook_pulse
+  alias: Telegram Manual Gate (Vercel webhook)
+  trigger:
+    - platform: webhook
+      webhook_id: vercel_gate_v1_a8f3c91d
+      local_only: false
+  action:
+    - service: switch.turn_on
+      target:
+        entity_id: switch.sonoff_1001dd6335
+    - delay: "00:00:00.700"
+    - service: switch.turn_off
+      target:
+        entity_id: switch.sonoff_1001dd6335
+  mode: single
+
+- id: telegram_car_locate
+  alias: Telegram Car Locate
+  trigger:
+    - platform: event
+      event_type: telegram_command
+      event_data:
+        command: /locate
+  action:
+    - service: shell_command.car_locate
+  mode: single
+
+- id: telegram_car_findme
+  alias: Telegram Car Findme
+  trigger:
+    - platform: event
+      event_type: telegram_command
+      event_data:
+        command: /findme
+  action:
+    - service: shell_command.car_findme
+  mode: single
+
+- id: telegram_car_status
+  alias: Telegram Car Status
+  trigger:
+    - platform: event
+      event_type: telegram_command
+      event_data:
+        command: /status
+  action:
+    - service: shell_command.car_status
+  mode: single
