@@ -207,9 +207,16 @@ async function processGateAutomation(params: {
 
     const outsideSec = state.outside_since ? elapsedSeconds(state.outside_since, now) : 0;
     const drivingSec = state.driving_since ? elapsedSeconds(state.driving_since, now) : 0;
-    state.status = outsideSec >= MIN_OUTSIDE_SEC && drivingSec >= MIN_DRIVE_SEC
+    
+    const newStatus = outsideSec >= MIN_OUTSIDE_SEC && drivingSec >= MIN_DRIVE_SEC
       ? 'AWAY_CONFIRMED'
       : 'AWAY_PENDING';
+
+    if (newStatus === 'AWAY_CONFIRMED' && state.status !== 'AWAY_CONFIRMED') {
+      await sendTelegram(chatId, `🟢 *Geofence Armed*\nDevice: *${deviceId}*\nSystem is locked and ready to trigger the gate upon your return! 🚗`);
+    }
+    
+    state.status = newStatus;
     state.inside_streak = 0;
   } else if (state.status === 'AWAY_PENDING' && !isInsideInner) {
     // Between inner and outer radius, keep pending and wait for clear movement context.
