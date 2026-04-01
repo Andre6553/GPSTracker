@@ -216,25 +216,28 @@ async function processGateAutomation(params: {
   }
 
   if (isOutsideOuter) {
-    if (!state.outside_since) state.outside_since = now.toISOString();
-    if (isDriving) {
-      if (!state.driving_since) state.driving_since = now.toISOString();
-    } else {
-      state.driving_since = null;
-    }
-
-    const outsideSec = state.outside_since ? elapsedSeconds(state.outside_since, now) : 0;
-    const drivingSec = state.driving_since ? elapsedSeconds(state.driving_since, now) : 0;
-    
-    const newStatus = outsideSec >= MIN_OUTSIDE_SEC && drivingSec >= MIN_DRIVE_SEC
-      ? 'AWAY_CONFIRMED'
-      : 'AWAY_PENDING';
-
-    if (newStatus === 'AWAY_CONFIRMED' && state.status !== 'AWAY_CONFIRMED') {
-      await sendTelegram(chatId, `🟢 *Geofence Armed*\nDevice: *${deviceId}*\nSystem is locked and ready to trigger the gate upon your return! 🚗`);
+    if (state.status === 'HOME' || state.status === 'TRIGGERED_COOLDOWN') {
+      state.status = 'AWAY_PENDING';
+      state.outside_since = now.toISOString();
+      state.driving_since = isDriving ? now.toISOString() : null;
     }
     
-    state.status = newStatus;
+    if (state.status === 'AWAY_PENDING') {
+      if (!state.outside_since) state.outside_since = now.toISOString();
+      if (isDriving) {
+        if (!state.driving_since) state.driving_since = now.toISOString();
+      } else {
+        state.driving_since = null;
+      }
+
+      const outsideSec = state.outside_since ? elapsedSeconds(state.outside_since, now) : 0;
+      const drivingSec = state.driving_since ? elapsedSeconds(state.driving_since, now) : 0;
+      
+      if (outsideSec >= MIN_OUTSIDE_SEC && drivingSec >= MIN_DRIVE_SEC) {
+        state.status = 'AWAY_CONFIRMED';
+        await sendTelegram(chatId, `🟢 *Geofence Armed*\nDevice: *${deviceId}*\nSystem is locked and ready to trigger the gate upon your return! 🚗`);
+      }
+    }
     state.inside_streak = 0;
   } else if (state.status === 'AWAY_PENDING' && !isInsideInner) {
     // Between inner and outer radius, keep pending and wait for clear movement context.
