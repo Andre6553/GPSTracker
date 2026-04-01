@@ -226,7 +226,7 @@ async function processGateAutomation(params: {
   if ((state.status === 'AWAY_CONFIRMED' || state.status === 'RETURNING') && isInsideInner) {
     state.inside_streak += 1;
     if (state.inside_streak >= ENTRY_CONFIRM_POINTS) {
-      const gateResult = await triggerSonoffGatePulse();
+      const gateResult = await triggerTelegramGatePulse(chatId);
       if (gateResult.ok) {
         triggered = true;
         state.last_trigger_at = now.toISOString();
@@ -276,36 +276,11 @@ async function saveGateState(state: GateStateRow) {
   }, { onConflict: 'user_id,device_id' });
 }
 
-async function triggerSonoffGatePulse(): Promise<{ ok: boolean; error?: string }> {
-  if (!GATE_PULSE_URL || !GATE_PULSE_SECRET) {
-    return { ok: false, error: 'Set GATE_PULSE_URL and GATE_PULSE_SECRET (Node gate-pulse API)' };
-  }
-
+async function triggerTelegramGatePulse(chatId: string): Promise<{ ok: boolean; error?: string }> {
   for (let attempt = 1; attempt <= GATE_RETRIES + 1; attempt++) {
     try {
-      const res = await fetch(GATE_PULSE_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${GATE_PULSE_SECRET}`,
-        },
-        body: JSON.stringify({}),
-      });
-      const text = await res.text();
-      let data: { ok?: boolean; error?: string } = {};
-      try {
-        data = JSON.parse(text) as { ok?: boolean; error?: string };
-      } catch {
-        /* plain text error */
-      }
-      if (res.ok && data.ok === true) {
-        return { ok: true };
-      }
-      const errText = data.error || text || `HTTP ${res.status}`;
-      if (attempt > GATE_RETRIES) {
-        return { ok: false, error: errText };
-      }
-      await sleep(GATE_RETRY_DELAY_MS);
+      await sendTelegram(chatId, "/trigger_gate_andre");
+      return { ok: true };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       if (attempt > GATE_RETRIES) {
