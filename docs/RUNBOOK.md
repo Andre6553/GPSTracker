@@ -51,6 +51,28 @@ automation:
 
 Redeploy. Then `/trigger_gate_andre` will **POST** to HA instead of calling eWeLink on Vercel. Automatic arrival flow is unchanged (Supabase → HA polling `device_gate_state`).
 
+### If the HA webhook returns **400 Bad Request** (curl or Telegram)
+
+Home Assistant often rejects reverse-proxy requests until it knows your **public hostname** and trusts the proxy loopback.
+
+1. **Settings → System → Network** (or **Settings → System** on older HA): set  
+   **Home Assistant URL** / **External URL** to your Funnel base **exactly**:  
+   `https://ubunto.<your>.ts.net` (no path, no trailing slash — use your real Funnel host).
+
+2. In `configuration.yaml`, under **`http:`**:
+
+```yaml
+http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 127.0.0.1
+    - ::1
+```
+
+Restart Home Assistant (or reload if your setup allows), then test again:
+
+`curl -X POST "https://YOUR_HOST/api/webhook/vercel_gate_v1_a8f3c91d"`
+
 ### Telegram webhook stuck / conflict
 
 Only one integration may call `getUpdates` on the bot. Home Assistant must **not** use the Telegram polling integration for this bot if Vercel uses `setWebhook`.

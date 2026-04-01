@@ -33,14 +33,13 @@ export async function executeGatePulseFlexible(): Promise<GatePulseResult> {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 25_000);
     try {
+      // HA webhooks expect plain POST; JSON body sometimes yields 400 behind reverse proxies.
       const res = await fetch(haUrl, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
           Accept: "*/*",
           "User-Agent": "spatial-orbit-gate-pulse/1",
         },
-        body: "{}",
         signal: ctrl.signal,
       });
       if (res.ok) return { ok: true };
@@ -49,7 +48,7 @@ export async function executeGatePulseFlexible(): Promise<GatePulseResult> {
     } catch (e) {
       return {
         ok: false,
-        error: `HA webhook: ${webhookFetchErrorDetail(e)}. Check Vercel env URL, redeploy, test: curl -X POST "${haUrl}" -d "{}"`,
+        error: `HA webhook: ${webhookFetchErrorDetail(e)}. Check Vercel env URL, redeploy, test: curl -X POST "${haUrl}"`,
       };
     } finally {
       clearTimeout(t);
