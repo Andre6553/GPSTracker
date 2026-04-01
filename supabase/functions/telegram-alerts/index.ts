@@ -27,16 +27,13 @@ interface GateStateRow {
   cooldown_until: string | null;
 }
 
-const HOME_LAT = Number(Deno.env.get('HOME_LAT') ?? '-34.140104');
-const HOME_LON = Number(Deno.env.get('HOME_LON') ?? '22.092554');
-const INNER_RADIUS_M = Number(Deno.env.get('INNER_RADIUS_M') ?? '100');
-const OUTER_RADIUS_M = Number(Deno.env.get('OUTER_RADIUS_M') ?? '350');
+const OUTER_RADIUS_OFFSET_M = Number(Deno.env.get('OUTER_RADIUS_OFFSET_M') ?? '250');
 const MIN_DRIVE_SPEED_KMH = Number(Deno.env.get('MIN_DRIVE_SPEED_KMH') ?? '12');
 const MIN_OUTSIDE_SEC = Number(Deno.env.get('MIN_OUTSIDE_SEC') ?? '300');
 const MIN_DRIVE_SEC = Number(Deno.env.get('MIN_DRIVE_SEC') ?? '30');
 const ENTRY_CONFIRM_POINTS = Number(Deno.env.get('ENTRY_CONFIRM_POINTS') ?? '3');
 const COOLDOWN_SEC = Number(Deno.env.get('COOLDOWN_SEC') ?? '900');
-const TRIGGER_DEVICE_ID = Deno.env.get('TRIGGER_DEVICE_ID') ?? 'Andre';
+
 /** Node/Vercel route runs ewelink-api; Deno cannot load that npm package. */
 const GATE_PULSE_URL = Deno.env.get('GATE_PULSE_URL') ?? '';
 const GATE_PULSE_SECRET = Deno.env.get('GATE_PULSE_SECRET') ?? '';
@@ -84,14 +81,21 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // 3. GEOFENCE ALERTS
-    if (userSettings.geofence_alerts_enabled) {
-      const { data: geofences } = await supabase
-        .from('geofences')
-        .select('*')
-        .eq('user_id', deviceOwner.user_id);
+    // 3. GEOFENCE ALERTS & HOME LOOKUP
+    const { data: geofences } = await supabase
+      .from('geofences')
+      .select('*')
+      .eq('user_id', deviceOwner.user_id);
 
-      for (const zone of geofences || []) {
+    let homeZone: any = null;
+
+    for (const zone of geofences || []) {
+      // Find the user's specific Home geofence
+      if (zone.name.toLowerCase() === 'home') {
+        homeZone = zone;
+      }
+
+      if (userSettings.geofence_alerts_enabled) {
         const isInside = haversineKm(lat, lon, zone.lat, zone.lon) * 1000 <= zone.radius_meters;
         
         // Get previous status
@@ -122,8 +126,12 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    // 4. GATE AUTOMATION (reliable arrival detection)
-    if (GATE_AUTOMATION_ENABLED && device_id === TRIGGER_DEVICE_ID) {
+    // 4. GATE AUTOMATION (Multi-Tenant dynamic device trigger)
+    if (GATE_AUTOMATION_ENABLED && homeZone) {
+      // Dynamic Telegram Command (e.g., "Andre" -> "/trigger_gate_andre")
+      const safeDeviceId = device_id.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const dynamicTriggerCommand = `/trigger_gate_${safeDeviceId}`;
+
       await processGateAutomation({
         userId: deviceOwner.user_id,
         deviceId: device_id,
@@ -131,6 +139,11 @@ Deno.serve(async (req: Request) => {
         lon,
         speedKmh: speed_kmh,
         chatId: chat_id,
+        homeLat: homeZone.lat,
+        homeLon: homeZone.lon,
+        innerRadiusM: homeZone.radius_meters,
+        outerRadiusM: homeZone.radius_meters + OUTER_RADIUS_OFFSET_M,
+        triggerCommand: dynamicTriggerCommand
       });
     }
 
@@ -157,12 +170,17 @@ async function processGateAutomation(params: {
   lon: number;
   speedKmh: number;
   chatId: string;
+  homeLat: number;
+  homeLon: number;
+  innerRadiusM: number;
+  outerRadiusM: number;
+  triggerCommand: string;
 }) {
-  const { userId, deviceId, lat, lon, speedKmh, chatId } = params;
+  const { userId, deviceId, lat, lon, speedKmh, chatId, homeLat, homeLon, innerRadiusM, outerRadiusM, triggerCommand } = params;
   const now = new Date();
-  const distM = haversineKm(lat, lon, HOME_LAT, HOME_LON) * 1000;
-  const isInsideInner = distM <= INNER_RADIUS_M;
-  const isOutsideOuter = distM > OUTER_RADIUS_M;
+  const distM = haversineKm(lat, lon, homeLat, homeLon) * 1000;
+  const isInsideInner = distM <= innerRadiusM;
+  const isOutsideOuter = distM > outerRadiusM;
   const isDriving = speedKmh >= MIN_DRIVE_SPEED_KMH;
 
   const { data: row } = await supabase
@@ -233,7 +251,7 @@ async function processGateAutomation(params: {
   if ((state.status === 'AWAY_CONFIRMED' || state.status === 'RETURNING') && isInsideInner) {
     state.inside_streak += 1;
     if (state.inside_streak >= ENTRY_CONFIRM_POINTS) {
-      const gateResult = await triggerTelegramGatePulse(chatId);
+      const gateResult = await triggerTelegramGatePulse(chatId, triggerCommand);
       if (gateResult.ok) {
         triggered = true;
         state.last_trigger_at = now.toISOString();
@@ -283,10 +301,10 @@ async function saveGateState(state: GateStateRow) {
   }, { onConflict: 'user_id,device_id' });
 }
 
-async function triggerTelegramGatePulse(chatId: string): Promise<{ ok: boolean; error?: string }> {
+async function triggerTelegramGatePulse(chatId: string, command: string): Promise<{ ok: boolean; error?: string }> {
   for (let attempt = 1; attempt <= GATE_RETRIES + 1; attempt++) {
     try {
-      await sendTelegram(chatId, "/trigger_gate_andre");
+      await sendTelegram(chatId, command);
       return { ok: true };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
