@@ -66,11 +66,13 @@ const HISTORY_TRAIL_LINE_PAINT: mapboxgl.LinePaint = {
 
 /**
  * UI-only GPS jump filter:
- * occasionally a single GPS fix is way off; drawing a straight line to it makes the map “dart”.
- * Gate automation uses backend geofence logic and is unaffected by this filter.
+ * occasionally a single fix is off-map; we drop only implausible segments.
+ * Keep normal road movement continuous.
  */
-const MAX_TRAIL_STEP_M = 220; // break trail if consecutive points are separated by > this (meters)
-const TRAIL_FILTER_FALLBACK_MIN_SEGMENTS = 2; // if filtering removes almost everything, draw raw history
+const MAX_TRAIL_STEP_M = 900;
+const TRAIL_MIN_DT_S = 2;
+const TRAIL_MAX_IMPLIED_KMH = 150;
+const TRAIL_FILTER_FALLBACK_MIN_SEGMENTS = 2;
 
 /** Parked ≥ this wall time → violet “long stop” marker (overnight, engine off, multi-hour). */
 const LONG_STOP_MIN_MS = 2 * 60 * 60 * 1000;
@@ -120,6 +122,29 @@ function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number)
     Math.sin(dφ / 2) * Math.sin(dφ / 2) +
     Math.cos(p1) * Math.cos(p2) * Math.sin(dλ / 2) * Math.sin(dλ / 2);
   return 2 * r * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+function isImplausibleTrailSegment(a: TelemetryPoint, b: TelemetryPoint): boolean {
+  const lonA = Number(a.lon);
+  const latA = Number(a.lat);
+  const lonB = Number(b.lon);
+  const latB = Number(b.lat);
+  if (isNaN(lonA) || isNaN(latA) || isNaN(lonB) || isNaN(latB)) return true;
+
+  const stepM = haversineMeters(latA, lonA, latB, lonB);
+  if (stepM <= MAX_TRAIL_STEP_M) return false;
+
+  const tA = new Date(a.created_at).getTime();
+  const tB = new Date(b.created_at).getTime();
+  const dtS = Math.max(0.001, (tB - tA) / 1000);
+  if (dtS < TRAIL_MIN_DT_S) return true;
+
+  const impliedKmh = (stepM / dtS) * 3.6;
+  const reportedKmh = Math.max(0, Number(b.speed_kmh) || 0);
+
+  // Keep segment if movement and implied speed are broadly plausible.
+  if (impliedKmh <= TRAIL_MAX_IMPLIED_KMH && impliedKmh <= reportedKmh * 2 + 25) return false;
+  return true;
 }
 
 const TRAIL_ARROW_IMAGE_ID = "trail-arrow";
@@ -976,27 +1001,12 @@ export default function Map({
         (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
       );
 
-      // Mark points considered "GPS jump" (UI only).
-      const jitterFlags = new Array(sortedHistory.length).fill(false);
-      for (let i = 1; i < sortedHistory.length; i++) {
-        const prev = sortedHistory[i - 1];
-        const cur = sortedHistory[i];
-        const lonA = Number(prev.lon);
-        const latA = Number(prev.lat);
-        const lonB = Number(cur.lon);
-        const latB = Number(cur.lat);
-        if (isNaN(lonA) || isNaN(latA) || isNaN(lonB) || isNaN(latB)) continue;
-        const stepM = haversineMeters(latA, lonA, latB, lonB);
-        if (stepM > MAX_TRAIL_STEP_M) jitterFlags[i] = true;
-      }
-
       const lineFeatures: GeoJSON.Feature<GeoJSON.LineString>[] = [];
       for (let i = 0; i < sortedHistory.length - 1; i++) {
-        // If the end point is a jump outlier, don't draw the segment.
-        if (jitterFlags[i + 1]) continue;
+        const start = sortedHistory[i];
+        const end = sortedHistory[i + 1];
+        if (isImplausibleTrailSegment(start, end)) continue;
 
-        const start = sortedHistory[i],
-          end = sortedHistory[i + 1];
         const lonA = Number(start.lon),
           latA = Number(start.lat);
         const lonB = Number(end.lon),
@@ -1036,10 +1046,7 @@ export default function Map({
       const arrowFeatures: GeoJSON.Feature<GeoJSON.Point>[] = [];
       const n = sortedHistory.length;
 
-      // Bearing should reference the next non-jitter point so arrows follow the drawn trail.
       for (let i = 0; i < n; i++) {
-        if (jitterFlags[i] && i !== n - 1) continue;
-
         const p = sortedHistory[i];
         const lon = Number(p.lon);
         const lat = Number(p.lat);
@@ -1047,10 +1054,9 @@ export default function Map({
 
         if (i % 3 === 2) {
           let bearing = 0;
-          // Find next non-jitter point for bearing.
           let nextIdx: number | null = null;
           for (let j = i + 1; j < n; j++) {
-            if (!jitterFlags[j]) {
+            if (!isImplausibleTrailSegment(sortedHistory[Math.max(0, j - 1)], sortedHistory[j])) {
               nextIdx = j;
               break;
             }
@@ -1065,7 +1071,7 @@ export default function Map({
           } else if (i > 0) {
             let prevIdx: number | null = null;
             for (let j = i - 1; j >= 0; j--) {
-              if (!jitterFlags[j]) {
+              if (j === 0 || !isImplausibleTrailSegment(sortedHistory[j - 1], sortedHistory[j])) {
                 prevIdx = j;
                 break;
               }
