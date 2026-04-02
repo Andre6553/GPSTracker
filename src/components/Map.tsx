@@ -64,6 +64,14 @@ const HISTORY_TRAIL_LINE_PAINT: mapboxgl.LinePaint = {
   "line-opacity": 0.85,
 };
 
+/**
+ * UI-only GPS jump filter:
+ * occasionally a single GPS fix is way off; drawing a straight line to it makes the map “dart”.
+ * Gate automation uses backend geofence logic and is unaffected by this filter.
+ */
+const MAX_TRAIL_STEP_M = 220; // break trail if consecutive points are separated by > this (meters)
+const TRAIL_FILTER_FALLBACK_MIN_SEGMENTS = 2; // if filtering removes almost everything, draw raw history
+
 /** Parked ≥ this wall time → violet “long stop” marker (overnight, engine off, multi-hour). */
 const LONG_STOP_MIN_MS = 2 * 60 * 60 * 1000;
 
@@ -968,8 +976,25 @@ export default function Map({
         (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
       );
 
+      // Mark points considered "GPS jump" (UI only).
+      const jitterFlags = new Array(sortedHistory.length).fill(false);
+      for (let i = 1; i < sortedHistory.length; i++) {
+        const prev = sortedHistory[i - 1];
+        const cur = sortedHistory[i];
+        const lonA = Number(prev.lon);
+        const latA = Number(prev.lat);
+        const lonB = Number(cur.lon);
+        const latB = Number(cur.lat);
+        if (isNaN(lonA) || isNaN(latA) || isNaN(lonB) || isNaN(latB)) continue;
+        const stepM = haversineMeters(latA, lonA, latB, lonB);
+        if (stepM > MAX_TRAIL_STEP_M) jitterFlags[i] = true;
+      }
+
       const lineFeatures: GeoJSON.Feature<GeoJSON.LineString>[] = [];
       for (let i = 0; i < sortedHistory.length - 1; i++) {
+        // If the end point is a jump outlier, don't draw the segment.
+        if (jitterFlags[i + 1]) continue;
+
         const start = sortedHistory[i],
           end = sortedHistory[i + 1];
         const lonA = Number(start.lon),
@@ -984,34 +1009,77 @@ export default function Map({
           geometry: { type: "LineString", coordinates: [[lonA, latA], [lonB, latB]] },
         });
       }
+
+      // Fallback: if this trip is small and we filtered too aggressively, show raw history.
+      const shouldFallback = lineFeatures.length < TRAIL_FILTER_FALLBACK_MIN_SEGMENTS;
+      if (shouldFallback) {
+        lineFeatures.length = 0;
+        for (let i = 0; i < sortedHistory.length - 1; i++) {
+          const start = sortedHistory[i],
+            end = sortedHistory[i + 1];
+          const lonA = Number(start.lon),
+            latA = Number(start.lat);
+          const lonB = Number(end.lon),
+            latB = Number(end.lat);
+          if (isNaN(lonA) || isNaN(latA) || isNaN(lonB) || isNaN(latB)) continue;
+          lineFeatures.push({
+            type: "Feature",
+            properties: { speed_kmh: Number(end.speed_kmh) || 0 },
+            geometry: { type: "LineString", coordinates: [[lonA, latA], [lonB, latB]] },
+          });
+        }
+      }
+
       trailSource.setData({ type: "FeatureCollection", features: lineFeatures });
 
       const beadFeatures: GeoJSON.Feature<GeoJSON.Point>[] = [];
       const arrowFeatures: GeoJSON.Feature<GeoJSON.Point>[] = [];
       const n = sortedHistory.length;
+
+      // Bearing should reference the next non-jitter point so arrows follow the drawn trail.
       for (let i = 0; i < n; i++) {
+        if (jitterFlags[i] && i !== n - 1) continue;
+
         const p = sortedHistory[i];
-        const lon = Number(p.lon),
-          lat = Number(p.lat);
+        const lon = Number(p.lon);
+        const lat = Number(p.lat);
         if (isNaN(lon) || isNaN(lat)) continue;
 
         if (i % 3 === 2) {
           let bearing = 0;
-          if (i < n - 1) {
-            const nx = sortedHistory[i + 1];
-            const latN = Number(nx.lat),
-              lonN = Number(nx.lon);
+          // Find next non-jitter point for bearing.
+          let nextIdx: number | null = null;
+          for (let j = i + 1; j < n; j++) {
+            if (!jitterFlags[j]) {
+              nextIdx = j;
+              break;
+            }
+          }
+          if (nextIdx !== null) {
+            const nx = sortedHistory[nextIdx];
+            const latN = Number(nx.lat);
+            const lonN = Number(nx.lon);
             if (!isNaN(latN) && !isNaN(lonN)) {
               bearing = screenSegmentBearingDeg(map, lon, lat, lonN, latN);
             }
           } else if (i > 0) {
-            const pv = sortedHistory[i - 1];
-            const latP = Number(pv.lat),
-              lonP = Number(pv.lon);
-            if (!isNaN(latP) && !isNaN(lonP)) {
-              bearing = screenSegmentBearingDeg(map, lonP, latP, lon, lat);
+            let prevIdx: number | null = null;
+            for (let j = i - 1; j >= 0; j--) {
+              if (!jitterFlags[j]) {
+                prevIdx = j;
+                break;
+              }
+            }
+            if (prevIdx !== null) {
+              const pv = sortedHistory[prevIdx];
+              const latP = Number(pv.lat);
+              const lonP = Number(pv.lon);
+              if (!isNaN(latP) && !isNaN(lonP)) {
+                bearing = screenSegmentBearingDeg(map, lonP, latP, lon, lat);
+              }
             }
           }
+
           arrowFeatures.push({
             type: "Feature",
             properties: trailPointFeatureProps(p, "arrow", { bearing }),

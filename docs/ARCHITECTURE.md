@@ -51,7 +51,8 @@ Related: `user_devices` (device claim, speed alerts), `user_settings` (Telegram 
 
 - Triggered on telemetry (Supabase webhook → function).
 - Resolves home geofence, updates `device_gate_state`, sends speed/geofence Telegram messages as configured.
-- **Gate pulse path in code:** sends a dynamic Telegram command `/trigger_gate_<deviceId>` to the linked chat; the Vercel bot can handle that. **Parallel path:** HA reads `device_gate_state` and triggers the relay — this avoids exclusive Telegram webhook use by HA.
+- **Automatic gate:** when armed and entry is confirmed, the function sets **`device_gate_state.status = TRIGGERED_COOLDOWN`** only. **Home Assistant** (REST sensor + automation) opens the relay — no eWeLink, no Vercel, no Telegram “command” required for the car’s return. Optional env `GATE_EDGE_WEBHOOK_NOTIFY=true` + `HOME_ASSISTANT_GATE_WEBHOOK_URL` can POST to HA as a duplicate pulse (usually leave off to avoid double-opening).
+- **Manual gate from chat:** use Vercel `/trigger_gate_*` → HA webhook (see `pulse-gate.ts`).
 
 ### Vercel (`src/app/api/webhook/telegram/route.ts`)
 

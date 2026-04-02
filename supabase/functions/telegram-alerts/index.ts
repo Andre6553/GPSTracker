@@ -34,12 +34,10 @@ const MIN_DRIVE_SEC = Number(Deno.env.get('MIN_DRIVE_SEC') ?? '30');
 const ENTRY_CONFIRM_POINTS = Number(Deno.env.get('ENTRY_CONFIRM_POINTS') ?? '3');
 const COOLDOWN_SEC = Number(Deno.env.get('COOLDOWN_SEC') ?? '900');
 
-/** Node/Vercel route runs ewelink-api; Deno cannot load that npm package. */
-const GATE_PULSE_URL = Deno.env.get('GATE_PULSE_URL') ?? '';
-const GATE_PULSE_SECRET = Deno.env.get('GATE_PULSE_SECRET') ?? '';
-const GATE_RETRIES = Number(Deno.env.get('GATE_RETRIES') ?? '2');
-const GATE_RETRY_DELAY_MS = Number(Deno.env.get('GATE_RETRY_DELAY_MS') ?? '2000');
 const GATE_AUTOMATION_ENABLED = (Deno.env.get('GATE_AUTOMATION_ENABLED') ?? 'true') === 'true';
+/** Optional: duplicate POST to HA webhook when auto-triggering (usually unnecessary — HA sees `TRIGGERED_COOLDOWN` via REST). Set `GATE_EDGE_WEBHOOK_NOTIFY=true` to enable. */
+const HOME_ASSISTANT_GATE_WEBHOOK_URL = (Deno.env.get('HOME_ASSISTANT_GATE_WEBHOOK_URL') ?? '').trim();
+const GATE_EDGE_WEBHOOK_NOTIFY = (Deno.env.get('GATE_EDGE_WEBHOOK_NOTIFY') ?? 'false') === 'true';
 
 Deno.serve(async (req: Request) => {
   try {
@@ -128,10 +126,6 @@ Deno.serve(async (req: Request) => {
 
     // 4. GATE AUTOMATION (Multi-Tenant dynamic device trigger)
     if (GATE_AUTOMATION_ENABLED && homeZone) {
-      // Dynamic Telegram Command (e.g., "Andre" -> "/trigger_gate_andre")
-      const safeDeviceId = device_id.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const dynamicTriggerCommand = `/trigger_gate_${safeDeviceId}`;
-
       await processGateAutomation({
         userId: deviceOwner.user_id,
         deviceId: device_id,
@@ -143,7 +137,6 @@ Deno.serve(async (req: Request) => {
         homeLon: homeZone.lon,
         innerRadiusM: homeZone.radius_meters,
         outerRadiusM: homeZone.radius_meters + OUTER_RADIUS_OFFSET_M,
-        triggerCommand: dynamicTriggerCommand
       });
     }
 
@@ -174,9 +167,8 @@ async function processGateAutomation(params: {
   homeLon: number;
   innerRadiusM: number;
   outerRadiusM: number;
-  triggerCommand: string;
 }) {
-  const { userId, deviceId, lat, lon, speedKmh, chatId, homeLat, homeLon, innerRadiusM, outerRadiusM, triggerCommand } = params;
+  const { userId, deviceId, lat, lon, speedKmh, chatId, homeLat, homeLon, innerRadiusM, outerRadiusM } = params;
   const now = new Date();
   const distM = haversineKm(lat, lon, homeLat, homeLon) * 1000;
   const isInsideInner = distM <= innerRadiusM;
@@ -254,24 +246,30 @@ async function processGateAutomation(params: {
   if ((state.status === 'AWAY_CONFIRMED' || state.status === 'RETURNING') && isInsideInner) {
     state.inside_streak += 1;
     if (state.inside_streak >= ENTRY_CONFIRM_POINTS) {
-      const gateResult = await triggerTelegramGatePulse(chatId, triggerCommand);
-      if (gateResult.ok) {
-        triggered = true;
-        state.last_trigger_at = now.toISOString();
-        state.cooldown_until = new Date(now.getTime() + COOLDOWN_SEC * 1000).toISOString();
-        state.status = 'TRIGGERED_COOLDOWN';
-        state.outside_since = null;
-        state.driving_since = null;
-        await sendTelegram(
-          chatId,
-          `🚪 *Gate Opened*\nDevice: *${deviceId}*\nDistance: ${distM.toFixed(0)}m\nSpeed: ${speedKmh.toFixed(1)} km/h`
-        );
-      } else {
-        await sendTelegram(
-          chatId,
-          `⚠️ *Gate trigger failed*\nDevice: *${deviceId}*\nReason: ${gateResult.error}`
-        );
+      // Drive gate from Home Assistant: set DB state only. HA polls `device_gate_state` and pulses the relay.
+      // Do NOT depend on Vercel/eWeLink or Telegram commands here (avoids ewelink-api / spam on failure).
+      triggered = true;
+      state.last_trigger_at = now.toISOString();
+      state.cooldown_until = new Date(now.getTime() + COOLDOWN_SEC * 1000).toISOString();
+      state.status = 'TRIGGERED_COOLDOWN';
+      state.outside_since = null;
+      state.driving_since = null;
+
+      if (GATE_EDGE_WEBHOOK_NOTIFY && HOME_ASSISTANT_GATE_WEBHOOK_URL) {
+        try {
+          await fetch(HOME_ASSISTANT_GATE_WEBHOOK_URL, {
+            method: 'POST',
+            headers: { 'User-Agent': 'supabase-telegram-alerts/1', Accept: '*/*' },
+          });
+        } catch (e) {
+          console.error('HOME_ASSISTANT_GATE_WEBHOOK_URL optional notify failed', e);
+        }
       }
+
+      await sendTelegram(
+        chatId,
+        `🚪 *Gate triggered*\nDevice: *${deviceId}*\nHome Assistant will open the gate (sensor: \`TRIGGERED_COOLDOWN\`).\nDistance: ${distM.toFixed(0)}m · Speed: ${speedKmh.toFixed(1)} km/h`
+      );
     }
   } else if (isInsideInner) {
     state.status = 'HOME';
@@ -304,29 +302,9 @@ async function saveGateState(state: GateStateRow) {
   }, { onConflict: 'user_id,device_id' });
 }
 
-async function triggerTelegramGatePulse(chatId: string, command: string): Promise<{ ok: boolean; error?: string }> {
-  for (let attempt = 1; attempt <= GATE_RETRIES + 1; attempt++) {
-    try {
-      await sendTelegram(chatId, command);
-      return { ok: true };
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      if (attempt > GATE_RETRIES) {
-        return { ok: false, error: msg };
-      }
-      await sleep(GATE_RETRY_DELAY_MS);
-    }
-  }
-  return { ok: false, error: 'Unknown failure' };
-}
-
 function elapsedSeconds(iso: string, now: Date): number {
   const t = new Date(iso).getTime();
   return Math.max(0, Math.floor((now.getTime() - t) / 1000));
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number) {
