@@ -72,6 +72,8 @@ const HISTORY_TRAIL_LINE_PAINT: mapboxgl.LinePaint = {
 const MAX_TRAIL_STEP_M = 900;
 const TRAIL_MIN_DT_S = 2;
 const TRAIL_MAX_IMPLIED_KMH = 150;
+const TRAIL_LOW_SPEED_KMH = 8;
+const TRAIL_LOW_SPEED_JUMP_M = 140;
 const TRAIL_FILTER_FALLBACK_MIN_SEGMENTS = 2;
 
 /** Parked ≥ this wall time → violet “long stop” marker (overnight, engine off, multi-hour). */
@@ -141,6 +143,9 @@ function isImplausibleTrailSegment(a: TelemetryPoint, b: TelemetryPoint): boolea
 
   const impliedKmh = (stepM / dtS) * 3.6;
   const reportedKmh = Math.max(0, Number(b.speed_kmh) || 0);
+
+  // Very low reported speed should not teleport hundreds of meters.
+  if (reportedKmh <= TRAIL_LOW_SPEED_KMH && stepM >= TRAIL_LOW_SPEED_JUMP_M) return true;
 
   // Keep segment if movement and implied speed are broadly plausible.
   if (impliedKmh <= TRAIL_MAX_IMPLIED_KMH && impliedKmh <= reportedKmh * 2 + 25) return false;
