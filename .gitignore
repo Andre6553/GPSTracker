@@ -45,3 +45,6 @@ secrets.h
 
 # local HA deploy copy (may contain API keys)
 homeassistant/configuration.yaml
+
+# local telemetry exports / fleet dumps
+/logs/
