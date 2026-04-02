@@ -35,9 +35,9 @@ const ENTRY_CONFIRM_POINTS = Number(Deno.env.get('ENTRY_CONFIRM_POINTS') ?? '3')
 const COOLDOWN_SEC = Number(Deno.env.get('COOLDOWN_SEC') ?? '900');
 
 const GATE_AUTOMATION_ENABLED = (Deno.env.get('GATE_AUTOMATION_ENABLED') ?? 'true') === 'true';
-/** Optional: duplicate POST to HA webhook when auto-triggering (usually unnecessary — HA sees `TRIGGERED_COOLDOWN` via REST). Set `GATE_EDGE_WEBHOOK_NOTIFY=true` to enable. */
+/** Same HA webhook URL as Vercel `HOME_ASSISTANT_GATE_WEBHOOK_URL` (`/trigger_gate_*`). On auto-trigger we POST here immediately (like manual pulse). Set `GATE_EDGE_WEBHOOK_NOTIFY=false` to skip and rely only on HA REST polling `TRIGGERED_COOLDOWN`. */
 const HOME_ASSISTANT_GATE_WEBHOOK_URL = (Deno.env.get('HOME_ASSISTANT_GATE_WEBHOOK_URL') ?? '').trim();
-const GATE_EDGE_WEBHOOK_NOTIFY = (Deno.env.get('GATE_EDGE_WEBHOOK_NOTIFY') ?? 'false') === 'true';
+const GATE_EDGE_WEBHOOK_DISABLED = (Deno.env.get('GATE_EDGE_WEBHOOK_NOTIFY') ?? '').trim().toLowerCase() === 'false';
 
 Deno.serve(async (req: Request) => {
   try {
@@ -156,6 +156,27 @@ async function sendTelegram(chatId: string, text: string) {
   });
 }
 
+/** Plain POST — matches Vercel `executeGatePulseFlexible` → HA webhook. */
+async function pulseHomeAssistantGateWebhook(url: string): Promise<{ ok: boolean; detail: string }> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 25_000);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { Accept: '*/*', 'User-Agent': 'supabase-telegram-alerts-gate-pulse/1' },
+      signal: ctrl.signal,
+    });
+    if (res.ok) return { ok: true, detail: 'HTTP ' + res.status };
+    const text = (await res.text()).slice(0, 200);
+    return { ok: false, detail: text || `${res.status} ${res.statusText}` };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, detail: msg };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 async function processGateAutomation(params: {
   userId: string;
   deviceId: string;
@@ -255,20 +276,21 @@ async function processGateAutomation(params: {
       state.outside_since = null;
       state.driving_since = null;
 
-      if (GATE_EDGE_WEBHOOK_NOTIFY && HOME_ASSISTANT_GATE_WEBHOOK_URL) {
-        try {
-          await fetch(HOME_ASSISTANT_GATE_WEBHOOK_URL, {
-            method: 'POST',
-            headers: { 'User-Agent': 'supabase-telegram-alerts/1', Accept: '*/*' },
-          });
-        } catch (e) {
-          console.error('HOME_ASSISTANT_GATE_WEBHOOK_URL optional notify failed', e);
+      const gateCmdSlug = deviceId.toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'device';
+      let pulseLine = '';
+      if (HOME_ASSISTANT_GATE_WEBHOOK_URL && !GATE_EDGE_WEBHOOK_DISABLED) {
+        const pulse = await pulseHomeAssistantGateWebhook(HOME_ASSISTANT_GATE_WEBHOOK_URL);
+        if (pulse.ok) {
+          pulseLine = `\n✅ *HA webhook pulse* (same as \`/trigger_gate_${gateCmdSlug}\`): ok`;
+        } else {
+          pulseLine = `\n⚠️ *HA webhook pulse failed:* ${pulse.detail.replace(/[\n`]/g, ' ')}`;
+          console.error('HOME_ASSISTANT_GATE_WEBHOOK_URL pulse failed', pulse.detail);
         }
       }
 
       await sendTelegram(
         chatId,
-        `🚪 *Gate triggered*\nDevice: *${deviceId}*\nHome Assistant will open the gate (sensor: \`TRIGGERED_COOLDOWN\`).\nDistance: ${distM.toFixed(0)}m · Speed: ${speedKmh.toFixed(1)} km/h`
+        `🚪 *Gate triggered*\nDevice: *${deviceId}*\nSensor \`TRIGGERED_COOLDOWN\` + optional instant pulse${pulseLine}\nDistance: ${distM.toFixed(0)}m · Speed: ${speedKmh.toFixed(1)} km/h`
       );
     }
   } else if (isInsideInner) {

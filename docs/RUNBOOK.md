@@ -2,13 +2,28 @@
 
 ## Supabase Edge Function
 
-From repo root (with Supabase CLI logged in):
+**Project ref** comes from your Supabase host name (the subdomain before `.supabase.co`). Example: URL `https://abcdxyzcompany.supabase.co` → ref `abcdxyzcompany`.
+
+From repo root (with Supabase CLI **logged in** as a user who can manage that project):
 
 ```bash
+npx supabase login
 npx supabase functions deploy telegram-alerts --project-ref <YOUR_PROJECT_REF> --no-verify-jwt
 ```
 
+If deploy returns **403** / “necessary privileges”, run `npx supabase login` again (or use an access token for the account that owns the project), and confirm the ref matches **Project Settings → General → Reference ID** in the Supabase dashboard.
+
 Set function secrets in the Supabase dashboard (or CLI): at minimum `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `TELEGRAM_BOT_TOKEN`, plus any optional gate env vars from `STATE_MACHINE.md`.
+
+For **automatic** arrival triggers to **POST the same Home Assistant webhook** as Telegram `/trigger_gate_*` (instant pulse, not only REST polling), set **`HOME_ASSISTANT_GATE_WEBHOOK_URL`** on the `telegram-alerts` function to the same HTTPS URL you use on Vercel (Tailscale Funnel webhook). Set **`GATE_EDGE_WEBHOOK_NOTIFY=false`** only if you want DB `TRIGGERED_COOLDOWN` only and no extra webhook (rare). If the gate **opens twice** (webhook + REST automation both pulse the relay), remove the pulse from one HA automation or merge triggers.
+
+### Telegram spam: `Gate trigger failed` / `ewelink-api`
+
+The **current** `supabase/functions/telegram-alerts/index.ts` in this repo does **not** import `ewelink-api` and does **not** send that message. If Telegram still shows:
+
+`Could not find constraint 'ewelink-api' in the list of packages`
+
+then **Supabase is still running an old build** of `telegram-alerts`. Redeploy the function (commands above). Each new telemetry row invokes the function, so the outdated code can spam you once per GPS update until you deploy.
 
 Ensure the **database webhook** on `telemetry` (or relevant table) invokes `telegram-alerts` with the JSON payload shape the function expects (`record.device_id`, `lat`, `lon`, `speed_kmh`).
 

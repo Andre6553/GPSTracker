@@ -55,7 +55,7 @@ The system is a "Hybrid Cloud" setup designed for zero-latency gate triggers whi
 
 ### To Edit & Deploy:
 1.  **Edge Functions**:
-    `npx supabase functions deploy telegram-alerts --project-ref fikjnvkzhemamtlwsrin --no-verify-jwt`
+    `npx supabase login` then `npx supabase functions deploy telegram-alerts --project-ref iizjhnhnpsvaylcdgish --no-verify-jwt` (ref = subdomain of your Supabase URL).
 2.  **Home Assistant Config**:
     Edit files on the Windows PC first, then `scp` them to `/tmp/` on the NUC, and `mv` them to the HA directory via SSH.
 3.  **Manual Webhook Reset** (If it breaks again):
