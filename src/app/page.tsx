@@ -2027,6 +2027,9 @@ export default function Dashboard() {
             {/* ZONES TAB */}
             {activeTab === "geofences" && (
               <div className="flex flex-col gap-4">
+                 <p className="text-[10px] text-slate-500 leading-relaxed px-0.5">
+                   Zones on the map are always evaluated server-side. Telegram enter/leave is sent to <span className="text-slate-400">every linked chat</span> when <span className="text-slate-400">Zone enter / leave</span> is enabled on the Alerts tab.
+                 </p>
                  <button onClick={() => setIsAddingGeofence(!isAddingGeofence)} className={`w-full py-3 rounded-xl border transition-all flex items-center justify-center gap-2 font-bold text-sm ${isAddingGeofence ? 'bg-red-600 border-red-500 text-white' : 'bg-blue-600 border-blue-500 text-white hover:bg-blue-500'}`}>
                    {isAddingGeofence ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />} {isAddingGeofence ? 'Cancel Recording' : 'Add New Zone'}
                  </button>
@@ -2076,6 +2079,30 @@ export default function Dashboard() {
             {/* ALERTS TAB */}
             {activeTab === "alerts" && (
               <div className="flex flex-col gap-3">
+                <div className="bg-slate-800/80 p-4 rounded-xl border border-slate-700 space-y-3">
+                  <h2 className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest">Telegram notifications</h2>
+                  <p className="text-[10px] text-slate-500 leading-relaxed">
+                    Applies to all chats listed under Devices → Telegram Control (plus the legacy single chat field if set). Requires the Supabase <code className="text-slate-400">telegram-alerts</code> function deployed and a telemetry webhook.
+                  </p>
+                  <label className="flex items-center gap-3 cursor-pointer group">
+                    <input
+                      type="checkbox"
+                      className="rounded border-slate-600 bg-slate-900 text-blue-500 focus:ring-blue-500/40"
+                      checked={speedAlertsEnabled}
+                      onChange={(e) => setSpeedAlertsEnabled(e.target.checked)}
+                    />
+                    <span className="text-xs text-slate-200 group-hover:text-white">Speed over limit</span>
+                  </label>
+                  <label className="flex items-center gap-3 cursor-pointer group">
+                    <input
+                      type="checkbox"
+                      className="rounded border-slate-600 bg-slate-900 text-emerald-500 focus:ring-emerald-500/40"
+                      checked={geofenceAlertsEnabled}
+                      onChange={(e) => setGeofenceAlertsEnabled(e.target.checked)}
+                    />
+                    <span className="text-xs text-slate-200 group-hover:text-white">Zone enter / leave</span>
+                  </label>
+                </div>
                 {geofenceAlerts.length === 0 && <p className="text-xs text-slate-500 italic text-center py-10">No recent zone alerts recorded.</p>}
                 {geofenceAlerts.map((a, i) => (
                   <div key={i} className={`p-3 rounded-lg border flex items-start gap-3 transition-opacity ${i > 5 ? 'opacity-50' : 'opacity-100'} ${a.type === 'enter' ? 'bg-emerald-900/10 border-emerald-900/30' : 'bg-red-900/10 border-red-900/30'}`}>
@@ -2118,7 +2145,7 @@ export default function Dashboard() {
                   <h2 className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest flex items-center gap-2 mb-4">Telegram Control</h2>
                   <div className="flex flex-col gap-3">
                     <p className="text-[10px] text-slate-500 leading-relaxed italic">
-                      Link one or more Telegram chat IDs (your DM and/or a group) to enable /findme, /locate, /killon. Get the chat ID from the bot using /groupid (groups usually start with -100...).
+                      Link one or more Telegram chat IDs (your DM and/or a group) for /findme, /locate, /killon, speed alerts, and zone enter/leave. Get the chat ID from the bot using /groupid (groups often start with -100…). When <span className="text-slate-400 not-italic">Zone enter/leave</span> is on under the Alerts tab, <span className="text-slate-400 not-italic">every</span> linked chat here receives those messages.
                     </p>
                     <div className="flex gap-2">
                        <input 
