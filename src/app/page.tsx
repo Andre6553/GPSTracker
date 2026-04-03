@@ -509,21 +509,50 @@ export default function Dashboard() {
     }
 
     const timer = setTimeout(async () => {
-      const { data, error } = await supabase
+      const uid = session.user.id;
+      const core = {
+        user_id: uid,
+        fuel_cost: Number.isFinite(Number(fuelCost)) ? Number(fuelCost) : 22.5,
+        speed_alerts_enabled: speedAlertsEnabled,
+        geofence_alerts_enabled: geofenceAlertsEnabled,
+      };
+
+      // Core columns exist on every user_settings row; ETA columns require user_settings_eta_columns.sql on older DBs.
+      const { data: rowCore, error: errCore } = await supabase
         .from("user_settings")
-        .upsert({ 
-          user_id: session.user.id, 
-          fuel_cost: fuelCost,
-          speed_alerts_enabled: speedAlertsEnabled,
-          geofence_alerts_enabled: geofenceAlertsEnabled,
+        .upsert(core, { onConflict: "user_id" })
+        .select()
+        .single();
+
+      if (errCore) {
+        console.error("Settings save error (core):", errCore.message, errCore);
+        return;
+      }
+
+      const { data: rowEta, error: errEta } = await supabase
+        .from("user_settings")
+        .update({
           eta_highway_over_limit_kmh: etaHighwayOverKmh,
           eta_urban_over_limit_kmh: etaUrbanOverKmh,
           eta_duration_mode: etaDurationMode,
-        }, { onConflict: 'user_id' })
+        })
+        .eq("user_id", uid)
         .select()
         .single();
-      
-      if (!error && data) {
+
+      if (errEta) {
+        const msg = `${errEta.message ?? ""} ${(errEta as { details?: string }).details ?? ""}`;
+        if (/column|schema|does not exist|42703|PGRST204/i.test(msg)) {
+          console.warn(
+            "[Fleet Tracker] user_settings: add ETA columns — run supabase/user_settings_eta_columns.sql in Supabase SQL Editor."
+          );
+        } else {
+          console.error("Settings save error (ETA fields):", errEta.message, errEta);
+        }
+      }
+
+      const data = !errEta && rowEta ? rowEta : rowCore;
+      if (data) {
         lastSavedSettings.current = {
           ...data,
           eta_highway_over_limit_kmh: etaHighwayOverKmh,
@@ -533,8 +562,6 @@ export default function Dashboard() {
         if (session?.user?.id) {
           writeStoredEtaDriving(session.user.id, etaHighwayOverKmh, etaUrbanOverKmh, etaDurationMode);
         }
-      } else if (error) {
-        console.error("Settings save error:", error);
       }
     }, 2000); // 2s debounce
 
