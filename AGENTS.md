@@ -13,3 +13,7 @@ This version has breaking changes — APIs, conventions, and file structure may 
 The repo copy and the Arduino IDE copy must stay identical. Update the first-line version comment (`//ver… date time`) in **both** files. Do not overwrite `secrets.h` there unless the user asks.
 
 See also `.cursor/rules/firmware-cartracker-upload-mirror.mdc` (`alwaysApply: true`).
+
+## Git after code changes
+
+Agents should **commit and push** when they change project code, then **tell you** it was pushed. See `.cursor/rules/git-push-after-changes.mdc` (`alwaysApply: true`).

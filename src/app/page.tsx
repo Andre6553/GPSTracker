@@ -135,6 +135,9 @@ type EtaDurationMode = "mapbox" | "personalized";
 
 const ETA_DEFAULT_DURATION_MODE: EtaDurationMode = "personalized";
 
+/** Default L/h when engine idling / crawling; used with "Idle Today" time for fuel estimate. */
+const DEFAULT_IDLE_FUEL_LPH = 0.8;
+
 function parseEtaDurationMode(v: unknown): EtaDurationMode | null {
   return v === "mapbox" || v === "personalized" ? v : null;
 }
@@ -263,7 +266,9 @@ export default function Dashboard() {
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [lastHeard, setLastHeard] = useState<Record<string, string>>({}); // Decoupled heartbeat
   const [assignedDevices, setAssignedDevices] = useState<string[]>([]);
-  const [deviceConfigs, setDeviceConfigs] = useState<Record<string, { speed_limit: number, fuel_rate: number, fuel_type: string }>>({});
+  const [deviceConfigs, setDeviceConfigs] = useState<
+    Record<string, { speed_limit: number; fuel_rate: number; fuel_type: string; idle_fuel_lph?: number | null }>
+  >({});
 
   const [destination, setDestination] = useState("");
   const [etaInfo, setEtaInfo] = useState<RouteEtaInfo | null>(null);
@@ -325,6 +330,8 @@ export default function Dashboard() {
   // Fuel Estimation
   const [fuelRate, setFuelRate] = useState(12); // km/L default
   const [fuelCost, setFuelCost] = useState(22.50); // Cost per litre
+  /** Litres/hour while idling or ≤5 km/h (traffic); 0 disables idle portion of estimate. */
+  const [idleFuelLph, setIdleFuelLph] = useState(DEFAULT_IDLE_FUEL_LPH);
   const [fuelType, setFuelType] = useState<"Petrol" | "Diesel">("Petrol");
 
   // Active Tab
@@ -402,7 +409,7 @@ export default function Dashboard() {
         // Fetch user's assigned devices
         const { data: deviceRows } = await supabase
           .from("user_devices")
-          .select("device_id, speed_limit, fuel_rate, fuel_type")
+          .select("*")
           .eq("user_id", activeSession.user.id);
 
         const myDevices = deviceRows?.map((r: any) => r.device_id) || [];
@@ -411,7 +418,11 @@ export default function Dashboard() {
           configs[r.device_id] = {
             speed_limit: r.speed_limit,
             fuel_rate: r.fuel_rate,
-            fuel_type: r.fuel_type
+            fuel_type: r.fuel_type,
+            idle_fuel_lph:
+              r.idle_fuel_lph != null && Number.isFinite(Number(r.idle_fuel_lph))
+                ? Number(r.idle_fuel_lph)
+                : DEFAULT_IDLE_FUEL_LPH,
           };
         });
         setAssignedDevices(myDevices);
@@ -576,7 +587,7 @@ export default function Dashboard() {
 
   /** Snapshot of the loaded user_devices row for the selected device (drives sync + save baseline). */
   const deviceRowSig = selectedDeviceId
-    ? `${selectedDeviceId}:${deviceConfigs[selectedDeviceId]?.speed_limit ?? ""}:${deviceConfigs[selectedDeviceId]?.fuel_rate ?? ""}:${deviceConfigs[selectedDeviceId]?.fuel_type ?? ""}`
+    ? `${selectedDeviceId}:${deviceConfigs[selectedDeviceId]?.speed_limit ?? ""}:${deviceConfigs[selectedDeviceId]?.fuel_rate ?? ""}:${deviceConfigs[selectedDeviceId]?.fuel_type ?? ""}:${deviceConfigs[selectedDeviceId]?.idle_fuel_lph ?? ""}`
     : "";
 
   // PERSISTENCE: Save Device Configs (Speed, Fuel Rate)
@@ -592,7 +603,10 @@ export default function Dashboard() {
       Number(fuelRate) === Number(lastConfig.fuel_rate ?? 12);
     const sameType =
       fuelType === (lastConfig.fuel_type === "Diesel" ? "Diesel" : "Petrol");
-    if (sameSpeed && sameRate && sameType) return;
+    const sameIdle =
+      Number(idleFuelLph) ===
+      Number(lastConfig.idle_fuel_lph ?? DEFAULT_IDLE_FUEL_LPH);
+    if (sameSpeed && sameRate && sameType && sameIdle) return;
 
     const timer = setTimeout(async () => {
       const { data, error } = await supabase
@@ -601,10 +615,11 @@ export default function Dashboard() {
           speed_limit: speedLimit,
           fuel_rate: fuelRate,
           fuel_type: fuelType,
+          idle_fuel_lph: Math.max(0, Number(idleFuelLph) || 0),
         })
         .eq("user_id", session.user.id)
         .eq("device_id", selectedDeviceId)
-        .select("device_id, speed_limit, fuel_rate, fuel_type")
+        .select("device_id, speed_limit, fuel_rate, fuel_type, idle_fuel_lph")
         .maybeSingle();
 
       if (error) {
@@ -621,6 +636,8 @@ export default function Dashboard() {
           speed_limit: data.speed_limit ?? speedLimit,
           fuel_rate: data.fuel_rate ?? fuelRate,
           fuel_type: data.fuel_type ?? fuelType,
+          idle_fuel_lph:
+            data.idle_fuel_lph != null ? Number(data.idle_fuel_lph) : idleFuelLph,
         },
       }));
     }, 1500);
@@ -630,6 +647,7 @@ export default function Dashboard() {
     speedLimit,
     fuelRate,
     fuelType,
+    idleFuelLph,
     selectedDeviceId,
     session,
     authChecked,
@@ -642,6 +660,11 @@ export default function Dashboard() {
     const config = deviceConfigs[selectedDeviceId];
     setSpeedLimit(Number(config.speed_limit ?? 120));
     setFuelRate(Number(config.fuel_rate ?? 12));
+    setIdleFuelLph(
+      config.idle_fuel_lph != null && Number.isFinite(Number(config.idle_fuel_lph))
+        ? Math.max(0, Number(config.idle_fuel_lph))
+        : DEFAULT_IDLE_FUEL_LPH
+    );
     setFuelType(config.fuel_type === "Diesel" ? "Diesel" : "Petrol");
   }, [selectedDeviceId, deviceRowSig]);
 
@@ -1220,15 +1243,26 @@ export default function Dashboard() {
       return `${Math.floor(sec/3600)}h ${Math.floor((sec%3600)/60)}m`;
     };
 
+    const fuelLitresMoving = fuelRate > 0 ? dist / fuelRate : 0;
+    const lph = Number.isFinite(Number(idleFuelLph)) && Number(idleFuelLph) > 0 ? Number(idleFuelLph) : 0;
+    const fuelLitresIdle = lph > 0 ? (stoppedSec / 3600) * lph : 0;
+    const fuelLitres = fuelLitresMoving + fuelLitresIdle;
+    const fuelCostZar =
+      fuelLitres * (Number.isFinite(Number(fuelCost)) ? Number(fuelCost) : 0);
+
     return {
       distance: dist,
       maxSpeed: maxSpd,
       avgSpeed: sumSpd / todayPnts.length,
       movingTime: formatTime(movingSec),
       stoppedTime: formatTime(stoppedSec),
-      totalTime: formatTime(movingSec + stoppedSec)
+      totalTime: formatTime(movingSec + stoppedSec),
+      fuelLitres,
+      fuelLitresMoving,
+      fuelLitresIdle,
+      fuelCostZar,
     };
-  }, [selectedHistory, selectedDeviceId]);
+  }, [selectedHistory, selectedDeviceId, fuelRate, fuelCost, idleFuelLph]);
 
   const isOverSpeed = currentPnt ? currentPnt.speed_kmh > speedLimit : false;
 
@@ -1560,6 +1594,31 @@ export default function Dashboard() {
                         <span className="text-[9px] text-slate-500 uppercase font-bold">Total Time</span>
                         <span className="text-lg font-black text-white">{todayStats.totalTime}</span>
                       </div>
+                      <div className="flex flex-col">
+                        <span className="text-[9px] text-slate-500 uppercase font-bold">Est. fuel</span>
+                        {todayStats.fuelLitres > 0 ? (
+                          <>
+                            <span className="text-lg font-black text-white">
+                              {todayStats.fuelLitres.toFixed(2)}{" "}
+                              <span className="text-[10px] font-normal text-slate-500">L</span>
+                            </span>
+                            {todayStats.fuelLitresIdle > 0 && (
+                              <span className="text-[9px] text-slate-500 leading-tight mt-0.5">
+                                {todayStats.fuelLitresMoving.toFixed(2)} L moving +{" "}
+                                {todayStats.fuelLitresIdle.toFixed(2)} L idle/traffic
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <span className="text-lg font-black text-slate-500">—</span>
+                        )}
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-[9px] text-slate-500 uppercase font-bold text-amber-500">Fuel cost</span>
+                        <span className="text-lg font-black text-white">
+                          {todayStats.fuelLitres > 0 ? `R ${todayStats.fuelCostZar.toFixed(2)}` : "—"}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -1639,6 +1698,20 @@ export default function Dashboard() {
                     <div className="flex flex-col gap-1.5 col-span-2">
                       <span className="text-[9px] text-slate-500 uppercase font-bold">Consumption (km/L)</span>
                       <input type="number" value={fuelRate} onChange={e => setFuelRate(Number(e.target.value))} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white" />
+                    </div>
+                    <div className="flex flex-col gap-1.5 col-span-2">
+                      <span className="text-[9px] text-slate-500 uppercase font-bold">Idle / traffic (L/h)</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.1}
+                        value={idleFuelLph}
+                        onChange={(e) => setIdleFuelLph(Math.max(0, Number(e.target.value) || 0))}
+                        className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white"
+                      />
+                      <p className="text-[9px] text-slate-500 leading-snug">
+                        Extra fuel while stopped or ≤5 km/h (uses &quot;Idle Today&quot; time). Set to 0 for distance-only estimate.
+                      </p>
                     </div>
                     <div className="flex flex-col gap-1.5 col-span-2 border-t border-slate-700/80 pt-3 mt-1">
                       <span className="text-[9px] text-slate-500 uppercase font-bold text-emerald-500/90">

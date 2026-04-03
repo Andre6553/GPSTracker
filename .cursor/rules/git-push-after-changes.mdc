@@ -1,0 +1,32 @@
+---
+description: After changing project code, commit and push to git; tell the user it is done
+alwaysApply: true
+---
+
+# Git: commit and push after code changes
+
+When you **finish** a task that **changes the project** (application source, `supabase/*.sql` shipped with the app, `scripts/`, config that affects runtime, firmware under `esp32-firmware/`, etc.), treat the following as **default workflow** unless the user explicitly says **not** to push or to wait.
+
+## Do this before ending the turn
+
+1. `git status` — see what changed.
+2. Stage **only** files that belong to this task (do not bundle unrelated dirty files or optional gitlink/submodule bumps unless the user asked).
+3. `git commit -m "…"` with a clear message (what + why in normal English).
+4. `git push` to the **current branch** (usually `main`).
+
+## If push is not possible
+
+- **Nothing to commit** — say so; do not force empty commits.
+- **Conflict / rejected push** — report the error; do not rewrite history or force-push unless the user explicitly instructs.
+- **`esp32/` submodule** — if it has local commits you did not push, mention that the **parent** repo was pushed but the **submodule** may still need a separate push/merge (do not guess-force).
+
+## Tell the user
+
+In your final reply, add a short **Git** line when you pushed, for example:  
+*Pushed to `origin/main` (abc1234): short description of the commit.*  
+If you did not push, say **why** (no changes, user declined, error).
+
+## Do not
+
+- Push secrets, `.env*`, or one-off local experiments the user did not ask to publish.
+- Commit unrelated work the user did not authorize for this task.
