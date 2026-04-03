@@ -121,9 +121,10 @@ body {
     top: 5.25rem !important;
   }
 
-  .mobile-map-safe .mapboxgl-ctrl-top-right {
-    /* Move Mapbox +/- controls below centered search bar on portrait mobile. */
+  /* Mapbox anchors here; keep +/− clear of the fixed reload button (right-16). */
+  .mobile-map-safe .mapboxgl-map .mapboxgl-ctrl-top-right {
     top: 5.25rem !important;
+    right: 10px !important;
   }
 
   .mobile-action-cluster {
@@ -140,6 +141,10 @@ body {
 
   .mobile-speed-legend-safe {
     /* Push speed legend below hamburger in landscape phones/tablets. */
+    top: 4.75rem !important;
+  }
+
+  .mobile-map-safe .mapboxgl-map .mapboxgl-ctrl-top-right {
     top: 4.75rem !important;
   }
 }

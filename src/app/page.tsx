@@ -2202,7 +2202,7 @@ export default function Dashboard() {
           <button
             type="button"
             onClick={() => window.location.reload()}
-            className="lg:hidden fixed top-4 right-4 z-40 mobile-action-btn text-cyan-400"
+            className="lg:hidden fixed top-4 right-16 z-40 mobile-action-btn text-cyan-400"
             title="Reload page — fetch latest data"
             aria-label="Reload page"
           >
