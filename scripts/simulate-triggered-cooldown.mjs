@@ -15,6 +15,11 @@
  *   TELEGRAM_NOTIFY_CHAT_ID or NEXT_PUBLIC_TELEGRAM_CHAT_ID — chat to notify; if omitted, uses user_settings.telegram_chat_id for SIMULATE_USER_ID.
  *
  *   --no-notify — skip Telegram (DB update only).
+ *   --no-ha-pulse — skip POST to HOME_ASSISTANT_GATE_WEBHOOK_URL (see below).
+ *
+ * If HOME_ASSISTANT_GATE_WEBHOOK_URL is in .env.local, after TRIGGERED_COOLDOWN this script also
+ * POSTs that URL (same as /trigger_gate_* / Vercel). Omit or use --no-ha-pulse if HA should only
+ * react via REST polling (avoids double pulse).
  */
 import fs from "fs";
 import path from "path";
@@ -49,12 +54,14 @@ function loadEnvLocal(filePath) {
 function parseArgs(argv) {
   let reset = false;
   let noNotify = false;
+  let noHaPulse = false;
   let cooldownMinutes = 15;
   const positional = [];
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--reset") reset = true;
     else if (a === "--no-notify") noNotify = true;
+    else if (a === "--no-ha-pulse") noHaPulse = true;
     else if (a === "--cooldown-minutes" && argv[i + 1]) {
       cooldownMinutes = Number(argv[++i]);
       if (!Number.isFinite(cooldownMinutes) || cooldownMinutes < 0) {
@@ -63,16 +70,17 @@ function parseArgs(argv) {
     } else if (a === "--help" || a === "-h") positional.push("__help__");
     else positional.push(a);
   }
-  return { reset, noNotify, cooldownMinutes, positional };
+  return { reset, noNotify, noHaPulse, cooldownMinutes, positional };
 }
 
-const { reset, noNotify, cooldownMinutes, positional } = parseArgs(process.argv);
+const { reset, noNotify, noHaPulse, cooldownMinutes, positional } = parseArgs(process.argv);
 
 if (positional.includes("__help__")) {
   console.log(`Usage:
   node scripts/simulate-triggered-cooldown.mjs
   node scripts/simulate-triggered-cooldown.mjs --reset
   node scripts/simulate-triggered-cooldown.mjs --cooldown-minutes 2
+  node scripts/simulate-triggered-cooldown.mjs --no-ha-pulse   # DB only; no webhook POST
 
   (with SIMULATE_DEVICE_ID + SIMULATE_USER_ID in .env.local)
 
@@ -165,6 +173,22 @@ if (error) {
 }
 
 console.log(reset ? "Reset to HOME:" : "Simulated TRIGGERED_COOLDOWN:", JSON.stringify(data, null, 2));
+
+if (!reset && !noHaPulse) {
+  const haUrl = (env.HOME_ASSISTANT_GATE_WEBHOOK_URL || "").trim();
+  if (haUrl) {
+    try {
+      const res = await fetch(haUrl, {
+        method: "POST",
+        headers: { Accept: "*/*", "User-Agent": "simulate-triggered-cooldown/1" },
+      });
+      const t = (await res.text()).slice(0, 200);
+      console.log("HOME_ASSISTANT_GATE_WEBHOOK_URL:", res.ok ? "OK" : `${res.status} ${t}`);
+    } catch (e) {
+      console.warn("HA webhook POST failed:", e instanceof Error ? e.message : e);
+    }
+  }
+}
 
 async function resolveChatId(supabaseclient, uid, localEnv) {
   const fromEnv = (localEnv.TELEGRAM_NOTIFY_CHAT_ID || localEnv.NEXT_PUBLIC_TELEGRAM_CHAT_ID || "").trim();

@@ -28,6 +28,11 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  -- Bypass for one row: see telemetry_admin_insert.sql (admin_insert_telemetry RPC).
+  IF coalesce(current_setting('app.skip_home_geofence', true), '') = 'on' THEN
+    RETURN NEW;
+  END IF;
+
   /*
     Haversine distance in meters:
       2 * R * asin(sqrt(...)), with R = 6371000m

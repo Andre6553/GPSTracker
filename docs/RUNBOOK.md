@@ -131,6 +131,12 @@ Paths on the appliance often resemble:
 3. Check `device_gate_state` — stuck in `AWAY_PENDING` usually means outer/timing/driving thresholds not met.
 4. Confirm HA automation matches `TRIGGERED_COOLDOWN` and relay entity works manually.
 
+## Map pin inside Home (skip trigger)
+
+Normal `telemetry` INSERTs **inside** the Home geofence can be dropped by `skip_telemetry_inside_home_geofence`. To force one row at exact coordinates (e.g. for the dashboard pin), run **`supabase/telemetry_admin_insert.sql`** in the SQL Editor (adds `admin_insert_telemetry`, **service_role only**). Then:
+
+`node scripts/simulate-telemetry-outside.mjs --coords <lat> <lon>`
+
 ## Credentials
 
 Use environment variables and platform secret stores only. Rotate any secret that was ever pasted in plaintext.

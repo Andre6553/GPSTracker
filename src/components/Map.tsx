@@ -290,8 +290,12 @@ export default function Map({
   const playbackMarkerRef = useRef<mapboxgl.Marker | null>(null);
   const skipInitialThemeStyleRef = useRef(true);
   const selectedHistoryRef = useRef<TelemetryPoint[]>([]);
+  const cameraDeviceRef = useRef<string | null>(null);
+  const didFrameTrailForDeviceRef = useRef(false);
+  const didSparseCenterForDeviceRef = useRef(false);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [showTraffic, setShowTraffic] = useState(false);
+  const [followSelectedVehicle, setFollowSelectedVehicle] = useState(false);
 
   selectedHistoryRef.current = selectedHistory;
 
@@ -311,6 +315,11 @@ export default function Map({
       zoom: 13,
       attributionControl: false,
     });
+
+    const endFollowOnUserPan = (e: { originalEvent?: unknown }) => {
+      if (e.originalEvent) setFollowSelectedVehicle(false);
+    };
+    map.on("movestart", endFollowOnUserPan);
 
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
     map.addControl(new mapboxgl.AttributionControl({ compact: true }), "bottom-left");
@@ -489,6 +498,7 @@ export default function Map({
 
     return () => {
       skipInitialThemeStyleRef.current = true;
+      map.off("movestart", endFollowOnUserPan);
       map.remove();
       mapRef.current = null;
       setMapLoaded(false);
@@ -938,49 +948,95 @@ export default function Map({
   }, [playbackPoint?.lat, playbackPoint?.lon, mapLoaded]);
 
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !mapLoaded || playbackPoint) return;
-    if (suppressHistoryFitBounds) return;
-    if (selectedHistory.length < 2) return;
+    if (playbackPoint) setFollowSelectedVehicle(false);
+  }, [playbackPoint]);
 
-    const sorted = [...selectedHistory].sort(
-      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-    );
-    let minLng = Infinity,
-      maxLng = -Infinity,
-      minLat = Infinity,
-      maxLat = -Infinity;
-    for (const p of sorted) {
-      const lo = Number(p.lon),
-        la = Number(p.lat);
-      if (Number.isNaN(lo) || Number.isNaN(la)) continue;
-      minLng = Math.min(minLng, lo);
-      maxLng = Math.max(maxLng, lo);
-      minLat = Math.min(minLat, la);
-      maxLat = Math.max(maxLat, la);
-    }
-    if (minLng === Infinity) return;
-    const lonSpan = maxLng - minLng;
-    const latSpan = maxLat - minLat;
-    if (lonSpan < 1e-9 && latSpan < 1e-9) return;
+  useEffect(() => {
+    setFollowSelectedVehicle(false);
+  }, [selectedDeviceId]);
 
-    map.fitBounds(
-      [
-        [minLng, minLat],
-        [maxLng, maxLat],
-      ],
-      { padding: 56, maxZoom: 15, duration: 900 }
-    );
-  }, [selectedHistory, mapLoaded, playbackPoint, selectedDeviceId, suppressHistoryFitBounds]);
-
+  /** Fit the full trail once per selected device; new live points only extend the line — no repeated zoom-out. */
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapLoaded || playbackPoint) return;
-    if (selectedHistory.length > 1) return;
+    if (suppressHistoryFitBounds) return;
 
+    const devId = selectedDeviceId;
+    if (devId !== cameraDeviceRef.current) {
+      cameraDeviceRef.current = devId;
+      didFrameTrailForDeviceRef.current = false;
+      didSparseCenterForDeviceRef.current = false;
+    }
+
+    if (selectedHistory.length === 0) {
+      didFrameTrailForDeviceRef.current = false;
+      didSparseCenterForDeviceRef.current = false;
+      return;
+    }
+
+    if (selectedHistory.length >= 2) {
+      if (didFrameTrailForDeviceRef.current) return;
+
+      const sorted = [...selectedHistory].sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+      let minLng = Infinity,
+        maxLng = -Infinity,
+        minLat = Infinity,
+        maxLat = -Infinity;
+      for (const p of sorted) {
+        const lo = Number(p.lon),
+          la = Number(p.lat);
+        if (Number.isNaN(lo) || Number.isNaN(la)) continue;
+        minLng = Math.min(minLng, lo);
+        maxLng = Math.max(maxLng, lo);
+        minLat = Math.min(minLat, la);
+        maxLat = Math.max(maxLat, la);
+      }
+      if (minLng === Infinity) return;
+      const lonSpan = maxLng - minLng;
+      const latSpan = maxLat - minLat;
+      if (lonSpan < 1e-9 && latSpan < 1e-9) return;
+
+      map.fitBounds(
+        [
+          [minLng, minLat],
+          [maxLng, maxLat],
+        ],
+        { padding: 56, maxZoom: 15, duration: 900 }
+      );
+      didFrameTrailForDeviceRef.current = true;
+      didSparseCenterForDeviceRef.current = true;
+      return;
+    }
+
+    if (didSparseCenterForDeviceRef.current) return;
+    const selected = fleetLatest.find((c) => c.device_id === devId);
+    if (selected) {
+      map.flyTo({ center: [selected.lon, selected.lat], speed: 1.2 });
+      didSparseCenterForDeviceRef.current = true;
+    }
+  }, [
+    selectedHistory,
+    mapLoaded,
+    playbackPoint,
+    selectedDeviceId,
+    fleetLatest,
+    suppressHistoryFitBounds,
+  ]);
+
+  /** Crosshair / "find vehicle": after tap, keep center pinned on live fixes without changing zoom. */
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded || playbackPoint || !followSelectedVehicle) return;
     const selected = fleetLatest.find((c) => c.device_id === selectedDeviceId);
-    if (selected) map.flyTo({ center: [selected.lon, selected.lat], speed: 1.2 });
-  }, [selectedDeviceId, mapLoaded, fleetLatest, selectedHistory.length, playbackPoint]);
+    if (!selected) return;
+    map.easeTo({
+      center: [selected.lon, selected.lat],
+      duration: 0,
+      essential: true,
+    });
+  }, [fleetLatest, mapLoaded, playbackPoint, followSelectedVehicle, selectedDeviceId]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1335,7 +1391,10 @@ export default function Map({
 
   const flyToCar = useCallback(() => {
     const selected = fleetLatest.find((c) => c.device_id === selectedDeviceId);
-    if (selected && mapRef.current) mapRef.current.flyTo({ center: [selected.lon, selected.lat], zoom: 16, speed: 1.5 });
+    if (selected && mapRef.current) {
+      setFollowSelectedVehicle(true);
+      mapRef.current.flyTo({ center: [selected.lon, selected.lat], zoom: 16, speed: 1.5 });
+    }
   }, [fleetLatest, selectedDeviceId]);
 
   const flyToDestination = useCallback(() => {
