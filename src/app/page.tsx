@@ -458,7 +458,8 @@ export default function Dashboard() {
         if (settings) {
           setSpeedAlertsEnabled(settings.speed_alerts_enabled !== false);
           setGeofenceAlertsEnabled(settings.geofence_alerts_enabled !== false);
-          if (settings.fuel_cost) setFuelCost(settings.fuel_cost);
+          if (settings.fuel_cost != null && settings.fuel_cost !== "")
+            setFuelCost(Number(settings.fuel_cost));
           // Legacy fallback only (single chat id). Primary linkage is now user_telegram_chats.
           if (settings.telegram_chat_id) setTelegramId(String(settings.telegram_chat_id));
           lastSavedSettings.current = {
@@ -492,10 +493,13 @@ export default function Dashboard() {
     const cmpU = Number.isFinite(lastU) ? lastU : ETA_DEFAULT_URBAN_OVER_KMH;
     const cmpMode =
       parseEtaDurationMode(lastSavedSettings.current?.eta_duration_mode) ?? ETA_DEFAULT_DURATION_MODE;
+    const lastFuel = lastSavedSettings.current?.fuel_cost;
+    const sameFuel =
+      lastFuel != null && Number(lastFuel) === Number(fuelCost);
 
     // Only save if something actually changed from what we last loaded/saved
     if (lastSavedSettings.current &&
-        fuelCost === lastSavedSettings.current.fuel_cost &&
+        sameFuel &&
         speedAlertsEnabled === (lastSavedSettings.current.speed_alerts_enabled !== false) &&
         geofenceAlertsEnabled === (lastSavedSettings.current.geofence_alerts_enabled !== false) &&
         etaHighwayOverKmh === cmpH &&
@@ -543,51 +547,76 @@ export default function Dashboard() {
     writeStoredEtaDriving(session.user.id, etaHighwayOverKmh, etaUrbanOverKmh, etaDurationMode);
   }, [etaHighwayOverKmh, etaUrbanOverKmh, etaDurationMode, authChecked, session?.user?.id]);
 
+  /** Snapshot of the loaded user_devices row for the selected device (drives sync + save baseline). */
+  const deviceRowSig = selectedDeviceId
+    ? `${selectedDeviceId}:${deviceConfigs[selectedDeviceId]?.speed_limit ?? ""}:${deviceConfigs[selectedDeviceId]?.fuel_rate ?? ""}:${deviceConfigs[selectedDeviceId]?.fuel_type ?? ""}`
+    : "";
+
   // PERSISTENCE: Save Device Configs (Speed, Fuel Rate)
   useEffect(() => {
     if (!selectedDeviceId || !authChecked || !session) return;
-    
-    // Only save if the values are different from what we last loaded/saved for THIS device
+
     const lastConfig = deviceConfigs[selectedDeviceId];
-    if (lastConfig && 
-        speedLimit === lastConfig.speed_limit && 
-        fuelRate === lastConfig.fuel_rate && 
-        fuelType === lastConfig.fuel_type) {
-      return; 
-    }
+    if (!lastConfig) return;
+
+    const sameSpeed =
+      Number(speedLimit) === Number(lastConfig.speed_limit ?? 120);
+    const sameRate =
+      Number(fuelRate) === Number(lastConfig.fuel_rate ?? 12);
+    const sameType =
+      fuelType === (lastConfig.fuel_type === "Diesel" ? "Diesel" : "Petrol");
+    if (sameSpeed && sameRate && sameType) return;
 
     const timer = setTimeout(async () => {
-      await supabase
+      const { data, error } = await supabase
         .from("user_devices")
-        .update({ 
-          speed_limit: speedLimit, 
-          fuel_rate: fuelRate, 
-          fuel_type: fuelType 
+        .update({
+          speed_limit: speedLimit,
+          fuel_rate: fuelRate,
+          fuel_type: fuelType,
         })
-        .match({ user_id: session.user.id, device_id: selectedDeviceId });
-        
-      // Update local cache so we don't re-trigger unless it changes again
-      setDeviceConfigs(prev => ({
+        .eq("user_id", session.user.id)
+        .eq("device_id", selectedDeviceId)
+        .select("device_id, speed_limit, fuel_rate, fuel_type")
+        .maybeSingle();
+
+      if (error) {
+        console.error("user_devices update (trip defaults):", error.message);
+        return;
+      }
+      if (!data) {
+        console.warn("user_devices update: no row updated (missing device claim or RLS?)");
+        return;
+      }
+      setDeviceConfigs((prev) => ({
         ...prev,
-        [selectedDeviceId]: { 
-          speed_limit: speedLimit, 
-          fuel_rate: fuelRate, 
-          fuel_type: fuelType 
-        }
+        [selectedDeviceId]: {
+          speed_limit: data.speed_limit ?? speedLimit,
+          fuel_rate: data.fuel_rate ?? fuelRate,
+          fuel_type: data.fuel_type ?? fuelType,
+        },
       }));
     }, 1500);
 
     return () => clearTimeout(timer);
-  }, [speedLimit, fuelRate, fuelType, selectedDeviceId, session, authChecked, deviceConfigs]);
+  }, [
+    speedLimit,
+    fuelRate,
+    fuelType,
+    selectedDeviceId,
+    session,
+    authChecked,
+    deviceRowSig,
+  ]);
 
-  // Sync Device Config to local state when selecting a car
+  /** When the stored row for the selected device changes (load or after save), apply to inputs — not on every keystroke. */
   useEffect(() => {
     if (!selectedDeviceId || !deviceConfigs[selectedDeviceId]) return;
     const config = deviceConfigs[selectedDeviceId];
-    setSpeedLimit(config.speed_limit || 120);
-    setFuelRate(config.fuel_rate || 12);
+    setSpeedLimit(Number(config.speed_limit ?? 120));
+    setFuelRate(Number(config.fuel_rate ?? 12));
     setFuelType(config.fuel_type === "Diesel" ? "Diesel" : "Petrol");
-  }, [selectedDeviceId, deviceConfigs]);
+  }, [selectedDeviceId, deviceRowSig]);
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();

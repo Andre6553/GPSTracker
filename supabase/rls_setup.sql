@@ -21,6 +21,12 @@ CREATE POLICY "Users can delete their own device claims"
 ON public.user_devices FOR DELETE 
 USING (auth.uid() = user_id);
 
+-- Users can update their own claims (speed_limit, fuel_rate, fuel_type — Trip defaults)
+DROP POLICY IF EXISTS "Users can update their own device claims" ON public.user_devices;
+CREATE POLICY "Users can update their own device claims"
+ON public.user_devices FOR UPDATE
+USING (auth.uid() = user_id)
+WITH CHECK (auth.uid() = user_id);
 
 -- Enable RLS on telemetry
 ALTER TABLE public.telemetry ENABLE ROW LEVEL SECURITY;
