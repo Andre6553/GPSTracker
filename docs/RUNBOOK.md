@@ -25,7 +25,9 @@ The **current** `supabase/functions/telegram-alerts/index.ts` in this repo does 
 
 then **Supabase is still running an old build** of `telegram-alerts`. Redeploy the function (commands above). Each new telemetry row invokes the function, so the outdated code can spam you once per GPS update until you deploy.
 
-Ensure the **database webhook** on `telemetry` (or relevant table) invokes `telegram-alerts` with the JSON payload shape the function expects (`record.device_id`, `lat`, `lon`, `speed_kmh`).
+Ensure the **database webhook** on `telemetry` (or relevant table) invokes `telegram-alerts` with the JSON payload shape the function expects (`record.device_id`, `lat`, `lon`, `speed_kmh`). The function also accepts the row under `new` or at the top level (see `parseTelemetryRecord` in `telegram-alerts/index.ts`).
+
+**Alert toggles:** The dashboard treats `user_settings.speed_alerts_enabled` and `geofence_alerts_enabled` as **ON** when the column is `NULL` or missing (`!== false`). The edge function uses the same rule so zone enter/leave is not silently disabled by an unset column.
 
 ## Vercel (dashboard + webhook)
 

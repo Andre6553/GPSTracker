@@ -13,6 +13,28 @@ interface TelemetryPayload {
   speed_kmh: number;
 }
 
+/** DB webhooks usually send `{ record: row }`; some stacks use `new` or the row at top level. */
+function parseTelemetryRecord(body: unknown): TelemetryPayload | null {
+  if (!body || typeof body !== 'object') return null;
+  const b = body as Record<string, unknown>;
+  let row: Record<string, unknown>;
+  if (b.record && typeof b.record === 'object') row = b.record as Record<string, unknown>;
+  else if (b.new && typeof b.new === 'object') row = b.new as Record<string, unknown>;
+  else row = b;
+
+  const device_id = row.device_id != null ? String(row.device_id) : '';
+  const lat = Number(row.lat);
+  const lon = Number(row.lon);
+  const speed_kmh = Number(row.speed_kmh);
+  if (!device_id || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  return {
+    device_id,
+    lat,
+    lon,
+    speed_kmh: Number.isFinite(speed_kmh) ? speed_kmh : 0,
+  };
+}
+
 type GateStatus = 'HOME' | 'AWAY_PENDING' | 'AWAY_CONFIRMED' | 'RETURNING' | 'TRIGGERED_COOLDOWN';
 
 interface GateStateRow {
@@ -42,7 +64,12 @@ const GATE_EDGE_WEBHOOK_DISABLED = (Deno.env.get('GATE_EDGE_WEBHOOK_NOTIFY') ?? 
 Deno.serve(async (req: Request) => {
   try {
     const payload = await req.json();
-    const { device_id, lat, lon, speed_kmh } = payload.record as TelemetryPayload;
+    const parsed = parseTelemetryRecord(payload);
+    if (!parsed) {
+      console.warn('telegram-alerts: bad payload', JSON.stringify(payload).slice(0, 400));
+      return new Response('Bad payload: expected device_id, lat, lon', { status: 400 });
+    }
+    const { device_id, lat, lon, speed_kmh } = parsed;
     console.log("telegram-alerts hit", device_id, lat, lon, speed_kmh);
 
     // 1. Find the owner and their settings
@@ -64,8 +91,12 @@ Deno.serve(async (req: Request) => {
 
     const chat_id = userSettings.telegram_chat_id;
 
+    // Match dashboard semantics (src/app/page.tsx): NULL / missing => alerts ON; only explicit false disables.
+    const speedAlertsOn = userSettings.speed_alerts_enabled !== false;
+    const geofenceAlertsOn = userSettings.geofence_alerts_enabled !== false;
+
     // 2. SPEED ALERTS
-    if (userSettings.speed_alerts_enabled && speed_kmh > deviceOwner.speed_limit) {
+    if (speedAlertsOn && speed_kmh > deviceOwner.speed_limit) {
       const now = new Date();
       const lastSent = deviceOwner.last_speed_alert_sent ? new Date(deviceOwner.last_speed_alert_sent) : null;
       
@@ -88,13 +119,21 @@ Deno.serve(async (req: Request) => {
     let homeZone: any = null;
 
     for (const zone of geofences || []) {
-      // Find the user's specific Home geofence
-      if (zone.name.toLowerCase() === 'home') {
+      // Same name rule as skip_telemetry_inside_home_geofence (trim + case-insensitive).
+      const zoneName = typeof zone.name === 'string' ? zone.name.trim().toLowerCase() : '';
+      if (zoneName === 'home') {
         homeZone = zone;
       }
 
-      if (userSettings.geofence_alerts_enabled) {
-        const isInside = haversineKm(lat, lon, zone.lat, zone.lon) * 1000 <= zone.radius_meters;
+      if (geofenceAlertsOn) {
+        const zLat = Number(zone.lat);
+        const zLon = Number(zone.lon);
+        const radiusM = Number(zone.radius_meters);
+        if (!Number.isFinite(zLat) || !Number.isFinite(zLon) || !Number.isFinite(radiusM)) {
+          console.warn('telegram-alerts: skipping geofence with bad coords', zone.id, zone.name);
+          continue;
+        }
+        const isInside = haversineKm(lat, lon, zLat, zLon) * 1000 <= radiusM;
         
         // Get previous status
         const { data: statusRecord } = await supabase
@@ -126,18 +165,23 @@ Deno.serve(async (req: Request) => {
 
     // 4. GATE AUTOMATION (Multi-Tenant dynamic device trigger)
     if (GATE_AUTOMATION_ENABLED && homeZone) {
-      await processGateAutomation({
-        userId: deviceOwner.user_id,
-        deviceId: device_id,
-        lat,
-        lon,
-        speedKmh: speed_kmh,
-        chatId: chat_id,
-        homeLat: homeZone.lat,
-        homeLon: homeZone.lon,
-        innerRadiusM: homeZone.radius_meters,
-        outerRadiusM: homeZone.radius_meters + OUTER_RADIUS_OFFSET_M,
-      });
+      const hLat = Number(homeZone.lat);
+      const hLon = Number(homeZone.lon);
+      const hR = Number(homeZone.radius_meters);
+      if (Number.isFinite(hLat) && Number.isFinite(hLon) && Number.isFinite(hR)) {
+        await processGateAutomation({
+          userId: deviceOwner.user_id,
+          deviceId: device_id,
+          lat,
+          lon,
+          speedKmh: speed_kmh,
+          chatId: chat_id,
+          homeLat: hLat,
+          homeLon: hLon,
+          innerRadiusM: hR,
+          outerRadiusM: hR + OUTER_RADIUS_OFFSET_M,
+        });
+      }
     }
 
     return new Response('OK');
