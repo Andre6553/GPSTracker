@@ -859,8 +859,12 @@ export default function Dashboard() {
       // Live tab: default trail window = today (midnight → midnight).
       // History tab: user-specified date range (or blank = "recent", if they leave it blank).
       const todayYmd = format(new Date(), "yyyy-MM-dd");
-      const effectiveStartDate = activeTab === "live" && !startDate && !endDate ? todayYmd : startDate;
-      const effectiveEndDate = activeTab === "live" && !startDate && !endDate ? todayYmd : endDate;
+      // Blank dates + History tab = unbounded "recent" fetch (full trail behavior).
+      // Blank dates + any other tab = same default as Live (today only) so Zones/Devices/Alerts
+      // do not suddenly load all telemetry on the map.
+      const useTodayDefaultWindow = !startDate && !endDate && activeTab !== "history";
+      const effectiveStartDate = useTodayDefaultWindow ? todayYmd : startDate;
+      const effectiveEndDate = useTodayDefaultWindow ? todayYmd : endDate;
       const hasRange = !!(effectiveStartDate || effectiveEndDate);
       const all: TelemetryPoint[] = [];
 
@@ -904,7 +908,9 @@ export default function Dashboard() {
         .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
       console.log(
         `FETCHED HISTORY: ${sorted.length} records for ${selectedDeviceId} (${
-          hasRange ? `${effectiveStartDate || "…"} → ${effectiveEndDate || "…"}${activeTab === "live" && !startDate && !endDate ? " (live: today)" : ""}` : "recent"
+          hasRange
+            ? `${effectiveStartDate || "…"} → ${effectiveEndDate || "…"}${useTodayDefaultWindow ? " (default: today)" : ""}`
+            : "recent"
         })`
       );
       setSelectedHistory(sorted);
