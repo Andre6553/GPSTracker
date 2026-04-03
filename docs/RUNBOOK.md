@@ -29,6 +29,8 @@ Ensure the **database webhook** on `telemetry` (or relevant table) invokes `tele
 
 **Alert toggles:** The dashboard treats `user_settings.speed_alerts_enabled` and `geofence_alerts_enabled` as **ON** when the column is `NULL` or missing (`!== false`). The edge function uses the same rule so zone enter/leave is not silently disabled by an unset column.
 
+**Multiple Telegram chats:** The function sends each alert to **every** `user_telegram_chats.chat_id` for the device owner, plus `user_settings.telegram_chat_id` if set (deduped). Add rows via Table Editor or `supabase/user_telegram_chats_multicast_example.sql`. The same `chat_id` cannot be linked to two different users (unique index on `chat_id`).
+
 ## Vercel (dashboard + webhook)
 
 Deploy from your normal Vercel workflow; confirm env vars mirror local needs (`TELEGRAM_BOT_TOKEN`, Supabase URL keys, Adafruit credentials as used by `src/app/api/webhook/telegram/route.ts`).

@@ -61,6 +61,35 @@ const GATE_AUTOMATION_ENABLED = (Deno.env.get('GATE_AUTOMATION_ENABLED') ?? 'tru
 const HOME_ASSISTANT_GATE_WEBHOOK_URL = (Deno.env.get('HOME_ASSISTANT_GATE_WEBHOOK_URL') ?? '').trim();
 const GATE_EDGE_WEBHOOK_DISABLED = (Deno.env.get('GATE_EDGE_WEBHOOK_NOTIFY') ?? '').trim().toLowerCase() === 'false';
 
+/** All chats for alerts: `user_telegram_chats` rows plus legacy `user_settings.telegram_chat_id` (deduped). */
+async function resolveTelegramChatIds(userId: string, legacyChatId: unknown): Promise<string[]> {
+  const { data: rows, error } = await supabase
+    .from('user_telegram_chats')
+    .select('chat_id')
+    .eq('user_id', userId);
+  if (error) console.warn('telegram-alerts: user_telegram_chats read failed', error.message);
+
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const r of rows ?? []) {
+    const id = r.chat_id != null ? String(r.chat_id).trim() : '';
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  const leg = legacyChatId != null ? String(legacyChatId).trim() : '';
+  if (leg && !seen.has(leg)) {
+    seen.add(leg);
+    out.push(leg);
+  }
+  return out;
+}
+
+async function sendTelegramBroadcast(chatIds: string[], text: string) {
+  await Promise.allSettled(chatIds.map((id) => sendTelegram(id, text)));
+}
+
 Deno.serve(async (req: Request) => {
   try {
     const payload = await req.json();
@@ -87,9 +116,10 @@ Deno.serve(async (req: Request) => {
       .eq('user_id', deviceOwner.user_id)
       .single();
 
-    if (!userSettings || !userSettings.telegram_chat_id) return new Response('No Telegram link');
+    if (!userSettings) return new Response('No user_settings row');
 
-    const chat_id = userSettings.telegram_chat_id;
+    const chatIds = await resolveTelegramChatIds(deviceOwner.user_id, userSettings.telegram_chat_id);
+    if (chatIds.length === 0) return new Response('No Telegram link (add user_telegram_chats or telegram_chat_id)');
 
     // Match dashboard semantics (src/app/page.tsx): NULL / missing => alerts ON; only explicit false disables.
     const speedAlertsOn = userSettings.speed_alerts_enabled !== false;
@@ -102,7 +132,10 @@ Deno.serve(async (req: Request) => {
       
       // Throttle speed alerts to once every 5 minutes
       if (!lastSent || (now.getTime() - lastSent.getTime()) > 5 * 60 * 1000) {
-        await sendTelegram(chat_id, `🚨 *Speed Alert: ${device_id}*\nCurrent Speed: ${speed_kmh.toFixed(0)} km/h\nLimit: ${deviceOwner.speed_limit} km/h`);
+        await sendTelegramBroadcast(
+          chatIds,
+          `🚨 *Speed Alert: ${device_id}*\nCurrent Speed: ${speed_kmh.toFixed(0)} km/h\nLimit: ${deviceOwner.speed_limit} km/h`,
+        );
         await supabase
           .from('user_devices')
           .update({ last_speed_alert_sent: now.toISOString() })
@@ -148,7 +181,10 @@ Deno.serve(async (req: Request) => {
         if (isInside !== wasInside) {
           const action = isInside ? "ENTERED" : "LEFT";
           const emoji = isInside ? "🚩" : "✅";
-          await sendTelegram(chat_id, `${emoji} *Zone Alert: ${device_id}*\nHas ${action} the zone: *${zone.name}*`);
+          await sendTelegramBroadcast(
+            chatIds,
+            `${emoji} *Zone Alert: ${device_id}*\nHas ${action} the zone: *${zone.name}*`,
+          );
           
           await supabase
             .from('device_geofence_status')
@@ -175,7 +211,7 @@ Deno.serve(async (req: Request) => {
           lat,
           lon,
           speedKmh: speed_kmh,
-          chatId: chat_id,
+          chatIds,
           homeLat: hLat,
           homeLon: hLon,
           innerRadiusM: hR,
@@ -227,13 +263,13 @@ async function processGateAutomation(params: {
   lat: number;
   lon: number;
   speedKmh: number;
-  chatId: string;
+  chatIds: string[];
   homeLat: number;
   homeLon: number;
   innerRadiusM: number;
   outerRadiusM: number;
 }) {
-  const { userId, deviceId, lat, lon, speedKmh, chatId, homeLat, homeLon, innerRadiusM, outerRadiusM } = params;
+  const { userId, deviceId, lat, lon, speedKmh, chatIds, homeLat, homeLon, innerRadiusM, outerRadiusM } = params;
   const now = new Date();
   const distM = haversineKm(lat, lon, homeLat, homeLon) * 1000;
   const isInsideInner = distM <= innerRadiusM;
@@ -292,7 +328,10 @@ async function processGateAutomation(params: {
       
       if (outsideSec >= MIN_OUTSIDE_SEC && drivingSec >= MIN_DRIVE_SEC) {
         state.status = 'AWAY_CONFIRMED';
-        await sendTelegram(chatId, `🟢 *Geofence Armed*\nDevice: *${deviceId}*\nSystem is locked and ready to trigger the gate upon your return! 🚗`);
+        await sendTelegramBroadcast(
+          chatIds,
+          `🟢 *Geofence Armed*\nDevice: *${deviceId}*\nSystem is locked and ready to trigger the gate upon your return! 🚗`,
+        );
       }
     }
     state.inside_streak = 0;
@@ -332,9 +371,9 @@ async function processGateAutomation(params: {
         }
       }
 
-      await sendTelegram(
-        chatId,
-        `🚪 *Gate triggered*\nDevice: *${deviceId}*\nSensor \`TRIGGERED_COOLDOWN\` + optional instant pulse${pulseLine}\nDistance: ${distM.toFixed(0)}m · Speed: ${speedKmh.toFixed(1)} km/h`
+      await sendTelegramBroadcast(
+        chatIds,
+        `🚪 *Gate triggered*\nDevice: *${deviceId}*\nSensor \`TRIGGERED_COOLDOWN\` + optional instant pulse${pulseLine}\nDistance: ${distM.toFixed(0)}m · Speed: ${speedKmh.toFixed(1)} km/h`,
       );
     }
   } else if (isInsideInner) {
