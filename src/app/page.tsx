@@ -124,6 +124,14 @@ function parseCoordinateQuery(raw: string): [number, number] | null {
   return [b, a];
 }
 
+/** Telegram chat/group IDs are decimal strings (often negative for groups). Block these in "Link New Device". */
+function looksLikeTelegramChatId(raw: string): boolean {
+  const s = raw.trim();
+  if (!/^-?\d+$/.test(s)) return false;
+  const digits = s.replace(/^-/, "");
+  return digits.length >= 8;
+}
+
 /** Posted limit at or above this (km/h) is treated as highway/motorway-style for ETA offsets. */
 const ETA_HIGHWAY_POSTED_MIN_KMH = 90;
 
@@ -362,9 +370,26 @@ export default function Dashboard() {
   const [telegramId, setTelegramId] = useState("");
   const [isLinkingTelegram, setIsLinkingTelegram] = useState(false);
   const [telegramChats, setTelegramChats] = useState<{ chat_id: string; created_at?: string }[]>([]);
+  /** Legacy single-chat column; combined with user_telegram_chats to hide mistaken user_devices rows. */
+  const [settingsTelegramChatId, setSettingsTelegramChatId] = useState<string | null>(null);
   /** Picks which row to unlink in the Devices tab dropdowns (avoids huge scroll lists). */
   const [deviceUnlinkPick, setDeviceUnlinkPick] = useState<string>("");
   const [telegramUnlinkPick, setTelegramUnlinkPick] = useState<string>("");
+
+  /** GPS fleet only: excludes Telegram chat IDs if they were wrongly inserted into user_devices. */
+  const fleetDeviceIds = useMemo(() => {
+    const exclude = new Set<string>();
+    for (const c of telegramChats) {
+      const id = String(c.chat_id).trim();
+      if (id) exclude.add(id);
+    }
+    if (settingsTelegramChatId) exclude.add(settingsTelegramChatId);
+    return assignedDevices.filter((d) => !exclude.has(String(d)));
+  }, [assignedDevices, telegramChats, settingsTelegramChatId]);
+
+  useEffect(() => {
+    setAllData((prev) => prev.filter((p) => fleetDeviceIds.includes(p.device_id)));
+  }, [fleetDeviceIds]);
 
   const sendRemoteCommand = async (command: string, targetId?: string) => {
     const target = targetId || selectedDeviceId;
@@ -473,12 +498,19 @@ export default function Dashboard() {
             setFuelCost(Number(settings.fuel_cost));
           // Legacy fallback only (single chat id). Primary linkage is now user_telegram_chats.
           if (settings.telegram_chat_id) setTelegramId(String(settings.telegram_chat_id));
+          setSettingsTelegramChatId(
+            settings.telegram_chat_id != null && String(settings.telegram_chat_id).trim() !== ""
+              ? String(settings.telegram_chat_id).trim()
+              : null
+          );
           lastSavedSettings.current = {
             ...settings,
             eta_highway_over_limit_kmh: etaH,
             eta_urban_over_limit_kmh: etaU,
             eta_duration_mode: etaMode,
           };
+        } else {
+          setSettingsTelegramChatId(null);
         }
 
         // Load linked Telegram chats (DM + groups)
@@ -675,45 +707,55 @@ export default function Dashboard() {
 
   /** Pull latest row per device from Supabase (works when Realtime is off or the socket stalled). */
   const refetchFleetLatest = useCallback(async () => {
-    if (assignedDevices.length === 0) return;
+    if (fleetDeviceIds.length === 0) return;
     const { data, error } = await supabase
       .from("telemetry")
       .select("*")
-      .in("device_id", assignedDevices)
+      .in("device_id", fleetDeviceIds)
       .order("created_at", { ascending: false });
 
     if (error) {
       console.warn("refetchFleetLatest:", error.message);
       return;
     }
-    if (data && data.length > 0) {
-      const latestMap: Record<string, TelemetryPoint> = {};
-      data.forEach((p: any) => {
-        if (!latestMap[p.device_id]) latestMap[p.device_id] = p;
-      });
-      const latestList = Object.values(latestMap);
-      setAllData(latestList);
-
-      setLastHeard((prev) => {
-        const newMap = { ...prev };
-        latestList.forEach((p) => {
-          newMap[p.device_id] = p.created_at;
-        });
-        return newMap;
-      });
-
-      setSelectedDeviceId((prev) => prev || latestList[0]?.device_id || null);
+    const rows = data ?? [];
+    if (rows.length === 0) {
+      setAllData([]);
+      setSelectedDeviceId((prev) =>
+        prev && fleetDeviceIds.includes(prev) ? prev : fleetDeviceIds[0] ?? null
+      );
+      return;
     }
-  }, [assignedDevices]);
+    const latestMap: Record<string, TelemetryPoint> = {};
+    rows.forEach((p: any) => {
+      if (!latestMap[p.device_id]) latestMap[p.device_id] = p;
+    });
+    const latestList = Object.values(latestMap);
+    setAllData(latestList);
+
+    setLastHeard((prev) => {
+      const newMap = { ...prev };
+      latestList.forEach((p) => {
+        newMap[p.device_id] = p.created_at;
+      });
+      return newMap;
+    });
+
+    setSelectedDeviceId((prev) => {
+      if (prev && fleetDeviceIds.includes(prev)) return prev;
+      const firstLive = latestList.find((p) => fleetDeviceIds.includes(p.device_id))?.device_id;
+      return firstLive ?? fleetDeviceIds[0] ?? null;
+    });
+  }, [fleetDeviceIds]);
 
   // Polling: mobile / background tabs often suspend WebSockets — keep markers fresh.
   useEffect(() => {
-    if (!authChecked || assignedDevices.length === 0) return;
+    if (!authChecked || fleetDeviceIds.length === 0) return;
     const id = setInterval(() => {
       void refetchFleetLatest();
     }, 25000);
     return () => clearInterval(id);
-  }, [authChecked, assignedDevices, refetchFleetLatest]);
+  }, [authChecked, fleetDeviceIds.length, refetchFleetLatest]);
 
   // When returning to the tab, resync latest positions and reload the history trail (missed inserts).
   useEffect(() => {
@@ -726,16 +768,24 @@ export default function Dashboard() {
     return () => document.removeEventListener("visibilitychange", onVis);
   }, [refetchFleetLatest]);
 
+  // If the selected vehicle was a Telegram id wrongly stored in user_devices, move selection to a real device.
+  useEffect(() => {
+    if (!selectedDeviceId) return;
+    if (fleetDeviceIds.length > 0 && !fleetDeviceIds.includes(selectedDeviceId)) {
+      setSelectedDeviceId(fleetDeviceIds[0]);
+    }
+  }, [fleetDeviceIds, selectedDeviceId]);
+
   // Initialize Data & Realtime Subscription
   useEffect(() => {
-    if (!authChecked || assignedDevices.length === 0) return;
+    if (!authChecked || fleetDeviceIds.length === 0) return;
 
     void refetchFleetLatest();
 
     const channel = supabase.channel("live-telemetry")
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "telemetry" }, (payload: { new: TelemetryPoint }) => {
         const newData = payload.new;
-        if (assignedDevices.includes(newData.device_id)) {
+        if (fleetDeviceIds.includes(newData.device_id)) {
           setLastHeard(prev => ({ ...prev, [newData.device_id]: newData.created_at }));
           setAllData(prev => {
             const currentForDevice = prev.find(p => p.device_id === newData.device_id);
@@ -790,7 +840,7 @@ export default function Dashboard() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [authChecked, assignedDevices, selectedDeviceId, startDate, endDate, refetchFleetLatest]);
+  }, [authChecked, fleetDeviceIds, selectedDeviceId, startDate, endDate, refetchFleetLatest]);
 
   // Lazy-load history for selected device (paginate: PostgREST often caps ~1000 rows per request)
   useEffect(() => {
@@ -1154,8 +1204,6 @@ export default function Dashboard() {
     }
   }, [isGoNavigationActive]);
 
-  const activeDevices = assignedDevices;
-
   // Stats Calculations
   const totalDistanceKm = useMemo(() => {
     let dist = 0;
@@ -1286,6 +1334,10 @@ export default function Dashboard() {
   const [deviceStatusMsg, setDeviceStatusMsg] = useState("");
   const handleAddDevice = async () => {
     if (!newDeviceCode.trim()) return;
+    if (looksLikeTelegramChatId(newDeviceCode)) {
+      setDeviceStatusMsg("That looks like a Telegram chat ID. Use Telegram Control below, not Link New Device.");
+      return;
+    }
     const { error } = await supabase.from("user_devices").insert({ user_id: session?.user?.id, device_id: newDeviceCode.trim() });
     if (!error) {
       setAssignedDevices(prev => [...prev, newDeviceCode.trim()]);
@@ -1323,6 +1375,7 @@ export default function Dashboard() {
       }, { onConflict: "user_id" });
 
     if (!linkErr) {
+      setSettingsTelegramChatId(chatId);
       const { data: chats } = await supabase
         .from("user_telegram_chats")
         .select("chat_id,created_at")
@@ -1465,7 +1518,7 @@ export default function Dashboard() {
                   }}
                 >
                   <option value="" disabled className="bg-slate-950">--- Choose vehicle ---</option>
-                  {assignedDevices.map(id => (
+                  {fleetDeviceIds.map(id => (
                     <option key={id} value={id} className="bg-slate-950">{id}</option>
                   ))}
                 </select>
@@ -1508,9 +1561,9 @@ export default function Dashboard() {
 
           {/* Vehicle Selector */}
           <div>
-            <h2 className="text-[11px] font-semibold text-slate-500 uppercase flex items-center gap-2 mb-2"><Truck className="w-3.5 h-3.5" /> Fleet ({activeDevices.length})</h2>
+            <h2 className="text-[11px] font-semibold text-slate-500 uppercase flex items-center gap-2 mb-2"><Truck className="w-3.5 h-3.5" /> Fleet ({fleetDeviceIds.length})</h2>
             <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-              {activeDevices.map(id => (
+              {fleetDeviceIds.map(id => (
                 <button key={id} onClick={() => { setSelectedDeviceId(id); setPlaybackIndex(0); setIsPlaying(false); }} className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${selectedDeviceId === id ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'}`}>
                   {id}
                 </button>
@@ -1947,7 +2000,20 @@ export default function Dashboard() {
                     <input type="text" placeholder="Device Code" value={newDeviceCode} onChange={e => setNewDeviceCode(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white" />
                     <button onClick={handleAddDevice} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-2 rounded-lg transition"><Plus className="w-4 h-4" /></button>
                   </div>
-                  {deviceStatusMsg && <p className={`mt-2 text-[10px] font-bold ${deviceStatusMsg.includes("success") ? "text-emerald-400" : "text-red-400"}`}>{deviceStatusMsg}</p>}
+                  <p className="text-[10px] text-slate-500 mt-1">Tracker name only (e.g. Andre). Telegram chat IDs belong under Telegram Control, not here.</p>
+                  {deviceStatusMsg && (
+                    <p
+                      className={`mt-2 text-[10px] font-bold ${
+                        deviceStatusMsg.includes("success")
+                          ? "text-emerald-400"
+                          : deviceStatusMsg.includes("Telegram")
+                          ? "text-amber-200"
+                          : "text-red-400"
+                      }`}
+                    >
+                      {deviceStatusMsg}
+                    </p>
+                  )}
                 </div>
 
                 <div className="bg-slate-800/80 p-4 rounded-xl border border-slate-700">
