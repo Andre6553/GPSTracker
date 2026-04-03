@@ -973,7 +973,7 @@ export default function Dashboard() {
       setGeofenceRadiusEdits((p) => {
         if (!(id in p)) return p;
         const q = { ...p };
-        delete q[id);
+        delete q[id];
         return q;
       });
       setGeofences(prev => prev.filter(g => g.id !== id));
