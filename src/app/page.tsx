@@ -146,6 +146,9 @@ const ETA_DEFAULT_DURATION_MODE: EtaDurationMode = "personalized";
 /** Default L/h when engine idling / crawling; used with "Idle Today" time for fuel estimate. */
 const DEFAULT_IDLE_FUEL_LPH = 0.8;
 
+const GEOFENCE_RADIUS_MIN_M = 10;
+const GEOFENCE_RADIUS_MAX_M = 500_000;
+
 function parseEtaDurationMode(v: unknown): EtaDurationMode | null {
   return v === "mapbox" || v === "personalized" ? v : null;
 }
@@ -351,6 +354,8 @@ export default function Dashboard() {
   const [newGeofencePos, setNewGeofencePos] = useState<{ lat: number, lon: number } | null>(null);
   const [geofenceName, setGeofenceName] = useState("");
   const [geofenceRadius, setGeofenceRadius] = useState(500);
+  /** In-progress radius strings per zone id (cleared after save or cancel). */
+  const [geofenceRadiusEdits, setGeofenceRadiusEdits] = useState<Record<string, string>>({});
   const [geofenceAlerts, setGeofenceAlerts] = useState<{ time: string; device_id: string; zone: string; type: "enter" | "exit" }[]>([]);
   const lastStatesRef = useRef<Record<string, Record<string, boolean>>>({}); // { deviceId: { geofenceId: isInside } }
   
@@ -926,6 +931,21 @@ export default function Dashboard() {
     loadGeofences();
   }, [authChecked, session]);
 
+  useEffect(() => {
+    const ids = new Set(geofences.map((g) => g.id));
+    setGeofenceRadiusEdits((prev) => {
+      const next = { ...prev };
+      let touched = false;
+      for (const k of Object.keys(next)) {
+        if (!ids.has(k)) {
+          delete next[k];
+          touched = true;
+        }
+      }
+      return touched ? next : prev;
+    });
+  }, [geofences]);
+
   const handleSaveGeofence = async () => {
     if (!newGeofencePos || !geofenceName || !session) return;
     const { data, error } = await supabase.from("geofences").insert({
@@ -949,7 +969,58 @@ export default function Dashboard() {
 
   const handleDeleteGeofence = async (id: string) => {
     const { error } = await supabase.from("geofences").delete().eq("id", id);
-    if (!error) setGeofences(prev => prev.filter(g => g.id !== id));
+    if (!error) {
+      setGeofenceRadiusEdits((p) => {
+        if (!(id in p)) return p;
+        const q = { ...p };
+        delete q[id);
+        return q;
+      });
+      setGeofences(prev => prev.filter(g => g.id !== id));
+    }
+  };
+
+  const commitGeofenceRadius = async (gf: Geofence) => {
+    if (!session) return;
+    const raw = geofenceRadiusEdits[gf.id];
+    const str = raw !== undefined ? raw.trim() : String(gf.radius_meters);
+    const n = parseInt(str, 10);
+    if (!Number.isFinite(n) || str === "") {
+      alert(`Enter radius in meters (${GEOFENCE_RADIUS_MIN_M}–${GEOFENCE_RADIUS_MAX_M.toLocaleString()}).`);
+      setGeofenceRadiusEdits((p) => {
+        if (!(gf.id in p)) return p;
+        const q = { ...p };
+        delete q[gf.id];
+        return q;
+      });
+      return;
+    }
+    const r = Math.round(Math.max(GEOFENCE_RADIUS_MIN_M, Math.min(GEOFENCE_RADIUS_MAX_M, n)));
+    if (r === gf.radius_meters) {
+      setGeofenceRadiusEdits((p) => {
+        if (!(gf.id in p)) return p;
+        const q = { ...p };
+        delete q[gf.id];
+        return q;
+      });
+      return;
+    }
+    const { error } = await supabase
+      .from("geofences")
+      .update({ radius_meters: r })
+      .eq("id", gf.id)
+      .eq("user_id", session.user.id);
+    if (error) {
+      alert(`Could not update zone: ${error.message}`);
+      return;
+    }
+    setGeofenceRadiusEdits((p) => {
+      if (!(gf.id in p)) return p;
+      const q = { ...p };
+      delete q[gf.id];
+      return q;
+    });
+    setGeofences((prev) => prev.map((g) => (g.id === gf.id ? { ...g, radius_meters: r } : g)));
   };
 
   const handleClearHistory = async () => {
@@ -1966,9 +2037,30 @@ export default function Dashboard() {
                  )}
                  <div className="flex flex-col gap-2">
                    {geofences.map(gf => (
-                     <div key={gf.id} className="bg-slate-800/50 border border-slate-700 p-3 rounded-lg flex justify-between items-center">
-                       <div><div className="font-bold text-xs text-white">{gf.name}</div><div className="text-[9px] text-slate-500 uppercase">{gf.radius_meters}m radius</div></div>
-                       <button onClick={() => handleDeleteGeofence(gf.id)} className="text-slate-500 hover:text-red-400"><X className="w-4 h-4" /></button>
+                     <div key={gf.id} className="bg-slate-800/50 border border-slate-700 p-3 rounded-lg flex justify-between items-start gap-3">
+                       <div className="min-w-0 flex-1 space-y-2">
+                         <div className="font-bold text-xs text-white">{gf.name}</div>
+                         <div className="flex items-center gap-2">
+                           <label htmlFor={`gf-r-${gf.id}`} className="text-[9px] text-slate-500 uppercase shrink-0">Radius (m)</label>
+                           <input
+                             id={`gf-r-${gf.id}`}
+                             type="number"
+                             min={GEOFENCE_RADIUS_MIN_M}
+                             max={GEOFENCE_RADIUS_MAX_M}
+                             value={geofenceRadiusEdits[gf.id] ?? String(gf.radius_meters)}
+                             onChange={(e) =>
+                               setGeofenceRadiusEdits((p) => ({ ...p, [gf.id]: e.target.value }))
+                             }
+                             onBlur={() => void commitGeofenceRadius(gf)}
+                             onKeyDown={(e) => {
+                               if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                             }}
+                             className="w-full min-w-0 bg-slate-900 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-white font-mono"
+                           />
+                         </div>
+                         <p className="text-[9px] text-slate-600">Change value and tap outside or press Enter to save.</p>
+                       </div>
+                       <button type="button" onClick={() => handleDeleteGeofence(gf.id)} className="text-slate-500 hover:text-red-400 shrink-0 mt-0.5" aria-label={`Delete zone ${gf.name}`}><X className="w-4 h-4" /></button>
                      </div>
                    ))}
                  </div>
