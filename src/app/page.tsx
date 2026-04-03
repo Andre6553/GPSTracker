@@ -358,6 +358,12 @@ export default function Dashboard() {
   const [geofenceRadiusEdits, setGeofenceRadiusEdits] = useState<Record<string, string>>({});
   const [geofenceAlerts, setGeofenceAlerts] = useState<{ time: string; device_id: string; zone: string; type: "enter" | "exit" }[]>([]);
   const lastStatesRef = useRef<Record<string, Record<string, boolean>>>({}); // { deviceId: { geofenceId: isInside } }
+  /** Skip re-processing the same telemetry row (polling + realtime). */
+  const lastGeofenceEvalAtRef = useRef<Record<string, string>>({});
+  const geofencesRef = useRef<Geofence[]>([]);
+  const sessionUserIdRef = useRef<string | null>(null);
+  /** Latest accepted (non-jitter) point per device — matches fleet map updates. */
+  const lastAcceptedFleetPointRef = useRef<Record<string, TelemetryPoint | null>>({});
   
   const [authChecked, setAuthChecked] = useState(false);
   const lastSavedSettings = useRef<any>(null);
@@ -530,6 +536,94 @@ export default function Dashboard() {
       }
     });
   }, [router]);
+
+  useEffect(() => {
+    geofencesRef.current = geofences;
+  }, [geofences]);
+
+  useEffect(() => {
+    sessionUserIdRef.current = session?.user?.id ?? null;
+  }, [session?.user?.id]);
+
+  /** Restore zone alert log for this user (browser-only; independent of Telegram). */
+  useEffect(() => {
+    if (!session?.user?.id || typeof window === "undefined") return;
+    try {
+      const raw = localStorage.getItem(`fleet-geofence-alerts:${session.user.id}`);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return;
+      const cleaned = parsed.filter(
+        (x) =>
+          x &&
+          typeof x === "object" &&
+          typeof (x as { time?: string }).time === "string" &&
+          typeof (x as { device_id?: string }).device_id === "string" &&
+          typeof (x as { zone?: string }).zone === "string" &&
+          ((x as { type?: string }).type === "enter" || (x as { type?: string }).type === "exit")
+      ) as { time: string; device_id: string; zone: string; type: "enter" | "exit" }[];
+      if (cleaned.length) setGeofenceAlerts(cleaned.slice(0, 100));
+    } catch {
+      /* ignore */
+    }
+  }, [session?.user?.id]);
+
+  /** Zone geometry changed — re-seed inside/outside without inventing enter/leave events. */
+  useEffect(() => {
+    lastStatesRef.current = {};
+    lastGeofenceEvalAtRef.current = {};
+  }, [geofences]);
+
+  const applyGeofenceForTelemetryPoint = useCallback((p: TelemetryPoint) => {
+    const zones = geofencesRef.current;
+    if (zones.length === 0) return;
+
+    if (lastGeofenceEvalAtRef.current[p.device_id] === p.created_at) return;
+    lastGeofenceEvalAtRef.current[p.device_id] = p.created_at;
+
+    const did = p.device_id;
+    if (!lastStatesRef.current[did]) lastStatesRef.current[did] = {};
+    const map = lastStatesRef.current[did];
+
+    for (const zone of zones) {
+      const inside =
+        haversineKm(p.lat, p.lon, Number(zone.lat), Number(zone.lon)) * 1000 <= Number(zone.radius_meters);
+      const prev = map[zone.id];
+      if (prev === undefined) {
+        map[zone.id] = inside;
+        continue;
+      }
+      if (prev !== inside) {
+        map[zone.id] = inside;
+        const uid = sessionUserIdRef.current;
+        const row = {
+          time: p.created_at,
+          device_id: did,
+          zone: zone.name,
+          type: inside ? ("enter" as const) : ("exit" as const),
+        };
+        setGeofenceAlerts((alerts) => {
+          const next = [row, ...alerts].slice(0, 100);
+          if (typeof window !== "undefined" && uid) {
+            try {
+              localStorage.setItem(`fleet-geofence-alerts:${uid}`, JSON.stringify(next));
+            } catch {
+              /* ignore */
+            }
+          }
+          return next;
+        });
+      }
+    }
+  }, []);
+
+  /** When zones or fleet positions update, re-evaluate (deduped per device timestamp inside apply). */
+  useEffect(() => {
+    if (geofences.length === 0 || allData.length === 0) return;
+    for (const p of allData) {
+      applyGeofenceForTelemetryPoint(p);
+    }
+  }, [geofences, allData, applyGeofenceForTelemetryPoint]);
 
   // PERSISTENCE: Save Global Settings (Fuel Cost)
   useEffect(() => {
@@ -746,12 +840,14 @@ export default function Dashboard() {
       return newMap;
     });
 
+    latestList.forEach((p) => applyGeofenceForTelemetryPoint(p));
+
     setSelectedDeviceId((prev) => {
       if (prev && fleetDeviceIds.includes(prev)) return prev;
       const firstLive = latestList.find((p) => fleetDeviceIds.includes(p.device_id))?.device_id;
       return firstLive ?? fleetDeviceIds[0] ?? null;
     });
-  }, [fleetDeviceIds]);
+  }, [fleetDeviceIds, applyGeofenceForTelemetryPoint]);
 
   // Polling: mobile / background tabs often suspend WebSockets — keep markers fresh.
   useEffect(() => {
@@ -791,6 +887,11 @@ export default function Dashboard() {
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "telemetry" }, (payload: { new: TelemetryPoint }) => {
         const newData = payload.new;
         if (fleetDeviceIds.includes(newData.device_id)) {
+          const prevAcc = lastAcceptedFleetPointRef.current[newData.device_id];
+          if (!isJitter(prevAcc ?? null, newData)) {
+            lastAcceptedFleetPointRef.current[newData.device_id] = newData;
+            applyGeofenceForTelemetryPoint(newData);
+          }
           setLastHeard(prev => ({ ...prev, [newData.device_id]: newData.created_at }));
           setAllData(prev => {
             const currentForDevice = prev.find(p => p.device_id === newData.device_id);
@@ -845,7 +946,7 @@ export default function Dashboard() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [authChecked, fleetDeviceIds, selectedDeviceId, startDate, endDate, refetchFleetLatest]);
+  }, [authChecked, fleetDeviceIds, selectedDeviceId, startDate, endDate, refetchFleetLatest, applyGeofenceForTelemetryPoint]);
 
   // Lazy-load history for selected device (paginate: PostgREST often caps ~1000 rows per request)
   useEffect(() => {
@@ -2103,13 +2204,55 @@ export default function Dashboard() {
                     <span className="text-xs text-slate-200 group-hover:text-white">Zone enter / leave</span>
                   </label>
                 </div>
-                {geofenceAlerts.length === 0 && <p className="text-xs text-slate-500 italic text-center py-10">No recent zone alerts recorded.</p>}
+                <div className="flex items-start justify-between gap-2 px-0.5">
+                  <p className="text-[10px] text-slate-500 leading-relaxed flex-1">
+                    Zone enter/leave below is computed from live GPS in this browser (same circle geometry as your zones). Telegram uses the server; the two can differ by a few seconds.
+                  </p>
+                  {geofenceAlerts.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGeofenceAlerts([]);
+                        const uid = session?.user?.id;
+                        if (uid && typeof window !== "undefined") {
+                          try {
+                            localStorage.removeItem(`fleet-geofence-alerts:${uid}`);
+                          } catch {
+                            /* ignore */
+                          }
+                        }
+                      }}
+                      className="shrink-0 text-[10px] text-slate-500 hover:text-red-400 underline underline-offset-2"
+                    >
+                      Clear log
+                    </button>
+                  )}
+                </div>
+                {geofenceAlerts.length === 0 && (
+                  <p className="text-xs text-slate-500 italic text-center py-10">No zone enter/leave events yet. Drive across a zone edge with this dashboard open, or check Telegram.</p>
+                )}
                 {geofenceAlerts.map((a, i) => (
-                  <div key={i} className={`p-3 rounded-lg border flex items-start gap-3 transition-opacity ${i > 5 ? 'opacity-50' : 'opacity-100'} ${a.type === 'enter' ? 'bg-emerald-900/10 border-emerald-900/30' : 'bg-red-900/10 border-red-900/30'}`}>
-                    <div className={`p-1.5 rounded-full mt-0.5 ${a.type === 'enter' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}`}><MapPin className="w-3.5 h-3.5" /></div>
-                    <div className="flex-1">
-                      <div className="flex justify-between items-start"><span className="text-xs font-bold text-white">{a.zone}</span><span className="text-[9px] text-slate-500">{formatDistanceToNow(new Date(a.time), { addSuffix: true })}</span></div>
-                      <p className="text-[10px] text-slate-400 mt-0.5 uppercase tracking-wide">{a.device_id} - <span className={a.type === 'enter' ? 'text-emerald-400 font-bold' : 'text-red-400 font-bold'}>{a.type.toUpperCase()}ED</span></p>
+                  <div
+                    key={`${a.time}|${a.device_id}|${a.zone}|${a.type}|${i}`}
+                    className={`p-3 rounded-lg border flex items-start gap-3 transition-opacity ${i > 5 ? "opacity-50" : "opacity-100"} ${a.type === "enter" ? "bg-emerald-900/10 border-emerald-900/30" : "bg-red-900/10 border-red-900/30"}`}
+                  >
+                    <div className={`p-1.5 rounded-full mt-0.5 ${a.type === "enter" ? "bg-emerald-500/20 text-emerald-400" : "bg-red-500/20 text-red-400"}`}>
+                      <MapPin className="w-3.5 h-3.5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex justify-between items-start gap-2">
+                        <span className="text-xs font-bold text-white">{a.zone}</span>
+                        <span className="text-[9px] text-slate-500 shrink-0">{formatDistanceToNow(ensureUTC(a.time), { addSuffix: true })}</span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 mt-0.5 uppercase tracking-wide">
+                        {a.device_id} —{" "}
+                        <span className={a.type === "enter" ? "text-emerald-400 font-bold" : "text-red-400 font-bold"}>
+                          {a.type === "enter" ? "ENTERED" : "LEFT"}
+                        </span>
+                      </p>
+                      <p className="text-[9px] text-slate-600 mt-1 font-mono truncate" title={a.time}>
+                        {format(ensureUTC(a.time), "yyyy-MM-dd HH:mm:ss")}
+                      </p>
                     </div>
                   </div>
                 ))}
