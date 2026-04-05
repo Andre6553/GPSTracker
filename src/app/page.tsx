@@ -135,6 +135,10 @@ function looksLikeTelegramChatId(raw: string): boolean {
 /** Posted limit at or above this (km/h) is treated as highway/motorway-style for ETA offsets. */
 const ETA_HIGHWAY_POSTED_MIN_KMH = 90;
 
+/** Full-history CSV export: page size and max pages (1 page = 1k rows; cap avoids browser OOM). */
+const TELEMETRY_EXPORT_PAGE_SIZE = 1000;
+const TELEMETRY_EXPORT_MAX_PAGES = 500;
+
 const ETA_DEFAULT_HIGHWAY_OVER_KMH = 20;
 const ETA_DEFAULT_URBAN_OVER_KMH = 10;
 const ETA_DRIVING_LS_PREFIX = "gpstracker-eta-driving:";
@@ -330,6 +334,7 @@ export default function Dashboard() {
     []
   );
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [isExportingHistoryCsv, setIsExportingHistoryCsv] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   // Trip Playback
@@ -1492,29 +1497,36 @@ export default function Dashboard() {
 
   const isOverSpeed = currentPnt ? currentPnt.speed_kmh > speedLimit : false;
 
-  // CSV export: sidebar trail uses "today only" on Live (etc.); download still needs full recent log when today is empty.
-  const fetchRecentTelemetryForExport = async (deviceId: string): Promise<TelemetryPoint[]> => {
-    const pageSize = 1000;
-    const maxRows = 50000;
+  /** All stored telemetry for export (newest pages first, then sorted oldest→newest). Not tied to map date filters. */
+  const fetchFullTelemetryForExport = async (
+    deviceId: string
+  ): Promise<{ rows: TelemetryPoint[]; hitCap: boolean }> => {
     const all: TelemetryPoint[] = [];
-    for (let offset = 0; offset < maxRows; offset += pageSize) {
+    let hitCap = false;
+    for (let page = 0; page < TELEMETRY_EXPORT_MAX_PAGES; page++) {
+      const offset = page * TELEMETRY_EXPORT_PAGE_SIZE;
       const { data, error } = await supabase
         .from("telemetry")
         .select("*")
         .eq("device_id", deviceId)
         .order("created_at", { ascending: false })
-        .range(offset, offset + pageSize - 1);
+        .range(offset, offset + TELEMETRY_EXPORT_PAGE_SIZE - 1);
       if (error) {
-        console.error("fetchRecentTelemetryForExport:", error);
-        return [];
+        console.error("fetchFullTelemetryForExport:", error);
+        return { rows: [], hitCap: false };
       }
       if (!data?.length) break;
       all.push(...(data as TelemetryPoint[]));
-      if (data.length < pageSize) break;
+      if (data.length < TELEMETRY_EXPORT_PAGE_SIZE) break;
+      if (page === TELEMETRY_EXPORT_MAX_PAGES - 1) {
+        hitCap = true;
+        break;
+      }
     }
-    return all
+    const rows = all
       .slice()
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    return { rows, hitCap };
   };
 
   const exportCSV = async () => {
@@ -1523,38 +1535,41 @@ export default function Dashboard() {
       alert("Select a vehicle first.");
       return;
     }
-    const useTodayDefaultWindow = !startDate && !endDate && activeTab !== "history";
-    let rows = selectedHistory;
-    if (rows.length === 0 && useTodayDefaultWindow) {
-      rows = await fetchRecentTelemetryForExport(deviceId);
+    setIsExportingHistoryCsv(true);
+    try {
+      const { rows, hitCap } = await fetchFullTelemetryForExport(deviceId);
+      if (rows.length === 0) {
+        alert("No GPS points to export for this vehicle.");
+        return;
+      }
+      if (hitCap) {
+        const cap = TELEMETRY_EXPORT_MAX_PAGES * TELEMETRY_EXPORT_PAGE_SIZE;
+        console.warn(
+          `CSV export reached the ${cap.toLocaleString()}-row limit; older points may be missing.`
+        );
+      }
+      const header = "timestamp,device_id,lat,lon,speed_kmh,altitude_m,satellites\n";
+      const body = rows
+        .map(
+          (p) =>
+            `${p.created_at},${p.device_id},${p.lat},${p.lon},${p.speed_kmh},${p.altitude_m ?? ""},${p.satellites ?? ""}`
+        )
+        .join("\n");
+      const blob = new Blob([header + body], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${deviceId}_fleet_history.csv`;
+      link.style.display = "none";
+      document.body.appendChild(link);
+      link.click();
+      setTimeout(() => {
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      }, 2500);
+    } finally {
+      setIsExportingHistoryCsv(false);
     }
-    if (rows.length === 0) {
-      alert(
-        useTodayDefaultWindow
-          ? "No GPS points to export for this vehicle."
-          : "No GPS points in the current date range. Adjust dates on the History tab or pick a range that has data."
-      );
-      return;
-    }
-    const header = "timestamp,device_id,lat,lon,speed_kmh,altitude_m,satellites\n";
-    const body = rows
-      .map(
-        (p) =>
-          `${p.created_at},${p.device_id},${p.lat},${p.lon},${p.speed_kmh},${p.altitude_m ?? ""},${p.satellites ?? ""}`
-      )
-      .join("\n");
-    const blob = new Blob([header + body], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${deviceId}_fleet_history.csv`;
-    link.style.display = "none";
-    document.body.appendChild(link);
-    link.click();
-    setTimeout(() => {
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-    }, 2500);
   };
 
   // Device Management
@@ -1698,10 +1713,16 @@ export default function Dashboard() {
               </button>
               <button
                 type="button"
+                disabled={isExportingHistoryCsv}
                 onClick={() => void exportCSV()}
-                className="p-2 rounded-full bg-slate-800 text-slate-400 hover:text-emerald-400"
-                title="Download GPS history as CSV"
-                aria-label="Download GPS history as CSV"
+                className="p-2 rounded-full bg-slate-800 text-slate-400 hover:text-emerald-400 disabled:opacity-40 disabled:pointer-events-none"
+                title={
+                  isExportingHistoryCsv
+                    ? "Loading full history…"
+                    : "Download all stored GPS history as CSV (up to 500k points)"
+                }
+                aria-label="Download all stored GPS history as CSV"
+                aria-busy={isExportingHistoryCsv}
               >
                 <Download className="w-4 h-4" />
               </button>
