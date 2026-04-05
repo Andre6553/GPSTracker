@@ -6,8 +6,12 @@
  * Same payload shape as the DB webhook on telemetry inserts.
  *
  * Env (.env.local):
- *   NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SIMULATE_USER_ID
+ *   NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
  *   SIMULATE_DEVICE_ID or pass device_id as first argument
+ *
+ * Owner user_id is taken from user_devices (same as telegram-alerts). If several
+ * rows share the same device_id, the script uses the row with the smallest
+ * user_id (lexicographic), matching the edge function.
  *
  * Usage:
  *   node scripts/simulate-zone-left-home.mjs
@@ -79,7 +83,7 @@ Sets Home geofence status to INSIDE, then invokes telegram-alerts with a point
   ✅ Zone Alert: <device> Has LEFT the zone: Home
 
 Requires .env.local: NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
-SIMULATE_USER_ID, and SIMULATE_DEVICE_ID or device_id as first arg.
+and SIMULATE_DEVICE_ID or device_id as first arg.
 
 user_settings.geofence_alerts_enabled must not be false (NULL/missing = ON).`);
       process.exit(0);
@@ -93,29 +97,48 @@ const { positional } = parseArgs(process.argv);
 const env = loadEnvLocal(envPath);
 const url = env.NEXT_PUBLIC_SUPABASE_URL;
 const key = env.SUPABASE_SERVICE_ROLE_KEY;
-const userId = env.SIMULATE_USER_ID?.trim();
 const deviceId = (positional[0] || env.SIMULATE_DEVICE_ID)?.trim();
 
-if (!url || !key || !userId || !deviceId) {
+if (!url || !key || !deviceId) {
   console.error(
-    "Need NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SIMULATE_USER_ID in .env.local, and SIMULATE_DEVICE_ID or device_id as first arg.",
+    "Need NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY in .env.local, and SIMULATE_DEVICE_ID or device_id as first arg.",
   );
   process.exit(1);
 }
 
 const supabase = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
 
+const { data: links, error: lErr } = await supabase
+  .from("user_devices")
+  .select("user_id")
+  .eq("device_id", deviceId);
+if (lErr) {
+  console.error("user_devices:", lErr.message);
+  process.exit(1);
+}
+if (!links?.length) {
+  console.error(`No user_devices row for device_id=${deviceId}. Link the device in the app first.`);
+  process.exit(1);
+}
+const sorted = [...links].sort((a, b) => String(a.user_id).localeCompare(String(b.user_id)));
+const ownerUserId = sorted[0].user_id;
+if (sorted.length > 1) {
+  console.warn(
+    `Multiple user_devices for "${deviceId}" (${sorted.length} rows). Using user_id=${ownerUserId} (lexicographically first — same as telegram-alerts). Remove duplicate links if alerts behave oddly.`,
+  );
+}
+
 const { data: zones, error: zErr } = await supabase
   .from("geofences")
   .select("id,name,lat,lon,radius_meters")
-  .eq("user_id", userId);
+  .eq("user_id", ownerUserId);
 if (zErr) {
   console.error(zErr.message);
   process.exit(1);
 }
 const home = (zones ?? []).find((z) => String(z.name ?? "").trim().toLowerCase() === "home");
 if (!home) {
-  console.error("No geofence named Home for SIMULATE_USER_ID.");
+  console.error(`No geofence named Home for owner user_id=${ownerUserId}.`);
   process.exit(1);
 }
 
@@ -129,7 +152,7 @@ if (!Number.isFinite(hlat) || !Number.isFinite(hlon) || !Number.isFinite(radiusM
 
 const { error: stErr } = await supabase.from("device_geofence_status").upsert(
   {
-    user_id: userId,
+    user_id: ownerUserId,
     device_id: deviceId,
     geofence_id: home.id,
     is_inside: true,
@@ -141,20 +164,30 @@ if (stErr) {
   console.error("device_geofence_status upsert:", stErr.message);
   process.exit(1);
 }
-console.log(`Set device_geofence_status: ${deviceId} @ Home → is_inside=true (pretend you were home).`);
+console.log(
+  `Set device_geofence_status: ${deviceId} @ Home (${home.id}) owner=${ownerUserId} → is_inside=true.`,
+);
 
 const far = offsetMeters(hlat, hlon, 2000, 0);
 const speedKmh = 15;
 
 const r = await invokeTelegramAlerts(url, key, deviceId, far.lat, far.lon, speedKmh);
-console.log(`Invoke outside Home (~2 km N) — HTTP ${r.status}`, r.ok ? "OK" : r.text);
+console.log(`Invoke outside Home (~2 km N) — HTTP ${r.status}`, r.ok ? `OK body: ${r.text}` : r.text);
 if (r.ok) {
+  const body = (r.text || "").trim();
+  if (body && body !== "OK") {
+    console.log(`Edge returned: ${body}`);
+    if (body.includes("No Telegram") || body.includes("No user_settings")) {
+      console.error("Fix the issue above — Telegram was not sent.");
+      process.exit(1);
+    }
+  }
   console.log(`
 Expected Telegram (Markdown):
   ✅ Zone Alert: ${deviceId}
   Has LEFT the zone: Home
 
-If nothing arrived: check user_settings.geofence_alerts_enabled, user_telegram_chats / telegram_chat_id, and Edge function logs.`);
+If nothing arrived: geofence_alerts_enabled, chats, or duplicate user_devices (wrong Home UUID).`);
 } else {
   process.exit(1);
 }

@@ -115,14 +115,21 @@ Deno.serve(async (req: Request) => {
     const { device_id, lat, lon, speed_kmh } = parsed;
     console.log("telegram-alerts hit", device_id, lat, lon, speed_kmh);
 
-    // 1. Find the owner and their settings
-    const { data: deviceOwner } = await supabase
+    // 1. Find the owner and their settings (avoid .single() — duplicate device_id breaks alerts)
+    const { data: deviceRows, error: deviceRowsErr } = await supabase
       .from('user_devices')
       .select('user_id, speed_limit, last_speed_alert_sent')
-      .eq('device_id', device_id)
-      .single();
-
-    if (!deviceOwner) return new Response('Device not claimed');
+      .eq('device_id', device_id);
+    if (deviceRowsErr || !deviceRows?.length) {
+      return new Response('Device not claimed', { status: 404 });
+    }
+    deviceRows.sort((a, b) => String(a.user_id).localeCompare(String(b.user_id)));
+    if (deviceRows.length > 1) {
+      console.warn(
+        `telegram-alerts: ${deviceRows.length} user_devices rows for ${device_id} — using user_id=${deviceRows[0].user_id} (stable sort). Deduplicate for consistent geofence status.`,
+      );
+    }
+    const deviceOwner = deviceRows[0];
 
     const { data: userSettings } = await supabase
       .from('user_settings')
