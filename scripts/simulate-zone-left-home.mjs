@@ -9,9 +9,8 @@
  *   NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
  *   SIMULATE_DEVICE_ID or pass device_id as first argument
  *
- * Owner user_id is taken from user_devices (same as telegram-alerts). If several
- * rows share the same device_id, the script uses the row with the smallest
- * user_id (lexicographic), matching the edge function.
+ * Owner user_id matches telegram-alerts: among user_devices rows for this device,
+ * prefer a user who has a geofence named "home" (see scripts/lib/resolve-device-context.mjs).
  *
  * Usage:
  *   node scripts/simulate-zone-left-home.mjs
@@ -21,6 +20,7 @@ import fs from "fs";
 import path from "path";
 import { createClient } from "@supabase/supabase-js";
 import { fileURLToPath } from "url";
+import { resolveDeviceContext } from "./lib/resolve-device-context.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
@@ -108,60 +108,19 @@ if (!url || !key || !deviceId) {
 
 const supabase = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
 
-const { data: links, error: lErr } = await supabase
-  .from("user_devices")
-  .select("user_id")
-  .eq("device_id", deviceId);
-if (lErr) {
-  console.error("user_devices:", lErr.message);
-  process.exit(1);
-}
-if (!links?.length) {
-  console.error(`No user_devices row for device_id=${deviceId}. Link the device in the app first.`);
-  process.exit(1);
-}
-const ownerCandidates = [...new Set(links.map((r) => r.user_id))];
-const { data: geoNameRows, error: gNameErr } = await supabase
-  .from("geofences")
-  .select("user_id,name")
-  .in("user_id", ownerCandidates);
-if (gNameErr) {
-  console.error(gNameErr.message);
-  process.exit(1);
-}
-const userIdsWithHome = new Set(
-  (geoNameRows ?? [])
-    .filter((z) => String(z.name ?? "").trim().toLowerCase() === "home")
-    .map((z) => z.user_id),
-);
-let pool = links.filter((r) => userIdsWithHome.has(r.user_id));
-if (pool.length === 0) {
-  console.error(
-    `No geofence named "Home" for any user_devices owner of "${deviceId}".\n` +
-      `  user_ids: ${ownerCandidates.join(", ")}\n` +
-      `Add a Home zone for your real account in the app, or remove the stale user_devices row.`,
-  );
-  process.exit(1);
-}
-pool.sort((a, b) => String(a.user_id).localeCompare(String(b.user_id)));
-const ownerUserId = pool[0].user_id;
-if (links.length > 1) {
-  console.warn(
-    `Multiple user_devices for "${deviceId}" (${links.length} rows). Using user_id=${ownerUserId} (has Home — same rule as telegram-alerts). Remove duplicate links when you can.`,
-  );
-}
-
-const { data: zones, error: zErr } = await supabase
-  .from("geofences")
-  .select("id,name,lat,lon,radius_meters")
-  .eq("user_id", ownerUserId);
-if (zErr) {
-  console.error(zErr.message);
-  process.exit(1);
-}
-const home = (zones ?? []).find((z) => String(z.name ?? "").trim().toLowerCase() === "home");
-if (!home) {
-  console.error(`No geofence named Home for owner user_id=${ownerUserId}.`);
+let ownerUserId;
+let home;
+try {
+  const ctx = await resolveDeviceContext(supabase, deviceId);
+  ownerUserId = ctx.ownerUserId;
+  home = ctx.home;
+  if (ctx.duplicateDeviceLinks) {
+    console.warn(
+      `Multiple user_devices for "${deviceId}". Using user_id=${ownerUserId} (has Home). Remove duplicate links when you can.`,
+    );
+  }
+} catch (e) {
+  console.error(e instanceof Error ? e.message : e);
   process.exit(1);
 }
 

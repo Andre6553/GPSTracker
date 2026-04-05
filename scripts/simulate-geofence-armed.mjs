@@ -3,9 +3,10 @@
  * while "outside" and driving — timing uses real wall clock (same as production).
  *
  * Prerequisites:
- * - .env.local: NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SIMULATE_USER_ID,
- *   SIMULATE_DEVICE_ID (or pass device_id as first arg).
- * - Edge function gate state must start from HOME (use --reset or run --reset-gate first).
+ * - .env.local: NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
+ *   SIMULATE_DEVICE_ID or pass device_id as first arg.
+ * - Owner user_id is resolved like telegram-alerts (user with Home geofence if device is duplicated).
+ * - Edge function gate state must start from HOME (use --reset).
  *
  * Timing vs Supabase Edge secrets (telegram-alerts):
  *   MIN_OUTSIDE_SEC (default 300) and MIN_DRIVE_SEC (default 30) — "driving" needs speed
@@ -21,14 +22,17 @@
  *   --allow-zone-alerts  Do not sync device_geofence_status (default: mark Home as already outside so
  *                        the 1st ping does not send a bogus Zone LEFT).
  *
- * Usage:
- *   node scripts/simulate-geofence-armed.mjs --quick --reset
- *   node scripts/simulate-geofence-armed.mjs
+ * Usage (~5 min production path):
+ *   node scripts/simulate-geofence-armed.mjs --reset Andre
+ *
+ * Shorthand:
+ *   node scripts/simulate-armed-5min.mjs Andre
  */
 import fs from "fs";
 import path from "path";
 import { createClient } from "@supabase/supabase-js";
 import { fileURLToPath } from "url";
+import { resolveDeviceContext } from "./lib/resolve-device-context.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
@@ -92,12 +96,12 @@ function parseArgs(argv) {
     const a = argv[i];
     if (a === "--help" || a === "-h") {
       console.log(`Usage:
-  node scripts/simulate-geofence-armed.mjs --quick --reset
-  node scripts/simulate-geofence-armed.mjs [--wait-ms 310000]
+  node scripts/simulate-geofence-armed.mjs --reset Andre
+  node scripts/simulate-armed-5min.mjs Andre
 
 --reset       Start from HOME in device_gate_state (recommended).
 --quick       Pause ~12s — you MUST set Edge secrets MIN_OUTSIDE_SEC=10 MIN_DRIVE_SEC=5 (restore 300/30 after).
-(default)     Pause ~310s for production defaults 300/30.
+(default)     Pause ~310s (~5m 10s) for production MIN_OUTSIDE_SEC=300 & MIN_DRIVE_SEC=30.
 --wait-ms N   Override pause in milliseconds.
 --allow-zone-alerts  Skip syncing geofence status (1st ping may send Zone LEFT if DB said inside).
 `);
@@ -118,21 +122,38 @@ const { quick, reset, allowZoneAlerts, waitMs: waitMsArg, positional } = parseAr
 const env = loadEnvLocal(envPath);
 const url = env.NEXT_PUBLIC_SUPABASE_URL;
 const key = env.SUPABASE_SERVICE_ROLE_KEY;
-const userId = env.SIMULATE_USER_ID?.trim();
 const deviceId = (positional[0] || env.SIMULATE_DEVICE_ID)?.trim();
 
-if (!url || !key || !userId || !deviceId) {
-  console.error("Need NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SIMULATE_USER_ID, SIMULATE_DEVICE_ID in .env.local (or pass device as arg).");
+if (!url || !key || !deviceId) {
+  console.error(
+    "Need NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY in .env.local, and SIMULATE_DEVICE_ID or device_id as first arg.",
+  );
   process.exit(1);
 }
 
 const supabase = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
 
+let ownerUserId;
+let home;
+try {
+  const ctx = await resolveDeviceContext(supabase, deviceId);
+  ownerUserId = ctx.ownerUserId;
+  home = ctx.home;
+  if (ctx.duplicateDeviceLinks) {
+    console.warn(
+      `Multiple user_devices for "${deviceId}". Using user_id=${ownerUserId} (has Home). Remove duplicate links when you can.`,
+    );
+  }
+} catch (e) {
+  console.error(e instanceof Error ? e.message : e);
+  process.exit(1);
+}
+
 if (reset) {
   const { data: existing, error: re } = await supabase
     .from("device_gate_state")
     .select("*")
-    .eq("user_id", userId)
+    .eq("user_id", ownerUserId)
     .eq("device_id", deviceId)
     .maybeSingle();
   if (re) {
@@ -141,7 +162,7 @@ if (reset) {
   }
   const now = new Date().toISOString();
   const base = existing ?? {
-    user_id: userId,
+    user_id: ownerUserId,
     device_id: deviceId,
     status: "HOME",
     outside_since: null,
@@ -170,19 +191,6 @@ if (reset) {
   console.log("Reset device_gate_state to HOME.");
 }
 
-const { data: zones, error: zErr } = await supabase
-  .from("geofences")
-  .select("id,name,lat,lon,radius_meters")
-  .eq("user_id", userId);
-if (zErr) {
-  console.error(zErr.message);
-  process.exit(1);
-}
-const home = (zones ?? []).find((z) => String(z.name ?? "").toLowerCase() === "home");
-if (!home) {
-  console.error("No Home geofence for this user.");
-  process.exit(1);
-}
 const hlat = Number(home.lat);
 const hlon = Number(home.lon);
 if (Number.isNaN(hlat) || Number.isNaN(hlon)) {
@@ -217,7 +225,7 @@ If you skip this, you will NOT get "Geofence Armed" — only maybe Zone alerts.
 if (!allowZoneAlerts) {
   const { error: stErr } = await supabase.from("device_geofence_status").upsert(
     {
-      user_id: userId,
+      user_id: ownerUserId,
       device_id: deviceId,
       geofence_id: home.id,
       is_inside: false,
