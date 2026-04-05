@@ -8,6 +8,9 @@
 --   Telegram / `telegram-alerts` runs on successful telemetry INSERT. If every
 --   inside-home row is dropped, ENTER alerts and `device_geofence_status` never
 --   see an "inside" sample — while EXIT still works from the first outside row.
+--   Gate auto-open uses `inside_streak` (one step per INSERT while inside inner
+--   radius). Keeping only one inside row per visit means `ENTRY_CONFIRM_POINTS`
+--   in the edge function must be 1 (default), or the gate will never fire.
 --
 -- Behavior:
 --   BEFORE INSERT on public.telemetry:

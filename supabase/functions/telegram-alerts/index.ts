@@ -53,7 +53,21 @@ const OUTER_RADIUS_OFFSET_M = Number(Deno.env.get('OUTER_RADIUS_OFFSET_M') ?? '2
 const MIN_DRIVE_SPEED_KMH = Number(Deno.env.get('MIN_DRIVE_SPEED_KMH') ?? '12');
 const MIN_OUTSIDE_SEC = Number(Deno.env.get('MIN_OUTSIDE_SEC') ?? '300');
 const MIN_DRIVE_SEC = Number(Deno.env.get('MIN_DRIVE_SEC') ?? '30');
-const ENTRY_CONFIRM_POINTS = Number(Deno.env.get('ENTRY_CONFIRM_POINTS') ?? '3');
+/**
+ * Inside-inner pings required before auto gate fire. Each increment needs a **telemetry INSERT**
+ * that runs this edge function. The DB trigger `skip_telemetry_inside_home_geofence` keeps only
+ * the first inside-Home row per return (then drops jitter), so values > 1 never accumulate in
+ * practice — auto gate would never open. Default 1; set higher only if you disable that skip or
+ * allow multiple inside rows per visit.
+ */
+const _entryConfirmEnv = Number(Deno.env.get('ENTRY_CONFIRM_POINTS') ?? '1');
+const ENTRY_CONFIRM_POINTS =
+  Number.isFinite(_entryConfirmEnv) && _entryConfirmEnv >= 1 ? Math.floor(_entryConfirmEnv) : 1;
+if (ENTRY_CONFIRM_POINTS > 1) {
+  console.warn(
+    `telegram-alerts: ENTRY_CONFIRM_POINTS=${ENTRY_CONFIRM_POINTS} — with home telemetry skip, only ~1 inside row is stored per return; auto gate may never open. Remove the secret or set ENTRY_CONFIRM_POINTS=1.`,
+  );
+}
 const COOLDOWN_SEC = Number(Deno.env.get('COOLDOWN_SEC') ?? '900');
 
 const GATE_AUTOMATION_ENABLED = (Deno.env.get('GATE_AUTOMATION_ENABLED') ?? 'true') === 'true';
