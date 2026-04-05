@@ -123,13 +123,30 @@ Deno.serve(async (req: Request) => {
     if (deviceRowsErr || !deviceRows?.length) {
       return new Response('Device not claimed', { status: 404 });
     }
-    deviceRows.sort((a, b) => String(a.user_id).localeCompare(String(b.user_id)));
-    if (deviceRows.length > 1) {
+    const ownerCandidates = [...new Set(deviceRows.map((r) => r.user_id))];
+    const { data: geoNameRows } = await supabase
+      .from('geofences')
+      .select('user_id,name')
+      .in('user_id', ownerCandidates);
+    const userIdsWithHome = new Set(
+      (geoNameRows ?? [])
+        .filter((z) => typeof z.name === 'string' && z.name.trim().toLowerCase() === 'home')
+        .map((z) => z.user_id as string),
+    );
+    let ownerPool = deviceRows.filter((r) => userIdsWithHome.has(r.user_id));
+    if (ownerPool.length === 0) {
       console.warn(
-        `telegram-alerts: ${deviceRows.length} user_devices rows for ${device_id} — using user_id=${deviceRows[0].user_id} (stable sort). Deduplicate for consistent geofence status.`,
+        `telegram-alerts: no "Home" geofence for any owner of ${device_id} (${ownerCandidates.join(', ')}). Using first user_devices row by user_id.`,
+      );
+      ownerPool = [...deviceRows];
+    }
+    ownerPool.sort((a, b) => String(a.user_id).localeCompare(String(b.user_id)));
+    if (deviceRows.length > 1 && userIdsWithHome.size > 0) {
+      console.warn(
+        `telegram-alerts: ${deviceRows.length} user_devices rows for ${device_id} — using user_id=${ownerPool[0].user_id} (has Home). Deduplicate for consistent geofence status.`,
       );
     }
-    const deviceOwner = deviceRows[0];
+    const deviceOwner = ownerPool[0];
 
     const { data: userSettings } = await supabase
       .from('user_settings')

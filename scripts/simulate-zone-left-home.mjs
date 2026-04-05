@@ -120,11 +120,34 @@ if (!links?.length) {
   console.error(`No user_devices row for device_id=${deviceId}. Link the device in the app first.`);
   process.exit(1);
 }
-const sorted = [...links].sort((a, b) => String(a.user_id).localeCompare(String(b.user_id)));
-const ownerUserId = sorted[0].user_id;
-if (sorted.length > 1) {
+const ownerCandidates = [...new Set(links.map((r) => r.user_id))];
+const { data: geoNameRows, error: gNameErr } = await supabase
+  .from("geofences")
+  .select("user_id,name")
+  .in("user_id", ownerCandidates);
+if (gNameErr) {
+  console.error(gNameErr.message);
+  process.exit(1);
+}
+const userIdsWithHome = new Set(
+  (geoNameRows ?? [])
+    .filter((z) => String(z.name ?? "").trim().toLowerCase() === "home")
+    .map((z) => z.user_id),
+);
+let pool = links.filter((r) => userIdsWithHome.has(r.user_id));
+if (pool.length === 0) {
+  console.error(
+    `No geofence named "Home" for any user_devices owner of "${deviceId}".\n` +
+      `  user_ids: ${ownerCandidates.join(", ")}\n` +
+      `Add a Home zone for your real account in the app, or remove the stale user_devices row.`,
+  );
+  process.exit(1);
+}
+pool.sort((a, b) => String(a.user_id).localeCompare(String(b.user_id)));
+const ownerUserId = pool[0].user_id;
+if (links.length > 1) {
   console.warn(
-    `Multiple user_devices for "${deviceId}" (${sorted.length} rows). Using user_id=${ownerUserId} (lexicographically first — same as telegram-alerts). Remove duplicate links if alerts behave oddly.`,
+    `Multiple user_devices for "${deviceId}" (${links.length} rows). Using user_id=${ownerUserId} (has Home — same rule as telegram-alerts). Remove duplicate links when you can.`,
   );
 }
 
