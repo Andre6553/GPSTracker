@@ -1492,19 +1492,69 @@ export default function Dashboard() {
 
   const isOverSpeed = currentPnt ? currentPnt.speed_kmh > speedLimit : false;
 
-  // CSV Export
-  const exportCSV = () => {
-    if (selectedHistory.length === 0) return;
+  // CSV export: sidebar trail uses "today only" on Live (etc.); download still needs full recent log when today is empty.
+  const fetchRecentTelemetryForExport = async (deviceId: string): Promise<TelemetryPoint[]> => {
+    const pageSize = 1000;
+    const maxRows = 50000;
+    const all: TelemetryPoint[] = [];
+    for (let offset = 0; offset < maxRows; offset += pageSize) {
+      const { data, error } = await supabase
+        .from("telemetry")
+        .select("*")
+        .eq("device_id", deviceId)
+        .order("created_at", { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      if (error) {
+        console.error("fetchRecentTelemetryForExport:", error);
+        return [];
+      }
+      if (!data?.length) break;
+      all.push(...(data as TelemetryPoint[]));
+      if (data.length < pageSize) break;
+    }
+    return all
+      .slice()
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  };
+
+  const exportCSV = async () => {
+    const deviceId = selectedDeviceId;
+    if (!deviceId) {
+      alert("Select a vehicle first.");
+      return;
+    }
+    const useTodayDefaultWindow = !startDate && !endDate && activeTab !== "history";
+    let rows = selectedHistory;
+    if (rows.length === 0 && useTodayDefaultWindow) {
+      rows = await fetchRecentTelemetryForExport(deviceId);
+    }
+    if (rows.length === 0) {
+      alert(
+        useTodayDefaultWindow
+          ? "No GPS points to export for this vehicle."
+          : "No GPS points in the current date range. Adjust dates on the History tab or pick a range that has data."
+      );
+      return;
+    }
     const header = "timestamp,device_id,lat,lon,speed_kmh,altitude_m,satellites\n";
-    const rows = selectedHistory.map(p => `${p.created_at},${p.device_id},${p.lat},${p.lon},${p.speed_kmh},${p.altitude_m},${p.satellites}`).join("\n");
-    const blob = new Blob([header + rows], { type: "text/csv;charset=utf-8;" });
+    const body = rows
+      .map(
+        (p) =>
+          `${p.created_at},${p.device_id},${p.lat},${p.lon},${p.speed_kmh},${p.altitude_m ?? ""},${p.satellites ?? ""}`
+      )
+      .join("\n");
+    const blob = new Blob([header + body], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.setAttribute("download", `${selectedDeviceId}_fleet_history.csv`);
+    link.download = `${deviceId}_fleet_history.csv`;
+    link.style.display = "none";
     document.body.appendChild(link);
     link.click();
-    setTimeout(() => { document.body.removeChild(link); URL.revokeObjectURL(url); }, 200);
+    setTimeout(() => {
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }, 2500);
   };
 
   // Device Management
@@ -1646,7 +1696,15 @@ export default function Dashboard() {
               >
                 <RefreshCw className="w-4 h-4" />
               </button>
-              <button onClick={exportCSV} className="p-2 rounded-full bg-slate-800 text-slate-400 hover:text-emerald-400"><Download className="w-4 h-4" /></button>
+              <button
+                type="button"
+                onClick={() => void exportCSV()}
+                className="p-2 rounded-full bg-slate-800 text-slate-400 hover:text-emerald-400"
+                title="Download GPS history as CSV"
+                aria-label="Download GPS history as CSV"
+              >
+                <Download className="w-4 h-4" />
+              </button>
               <button onClick={handleSignOut} className="p-2 rounded-full bg-slate-800 text-slate-400 hover:text-red-400"><LogOut className="w-4 h-4" /></button>
             </div>
           </div>
