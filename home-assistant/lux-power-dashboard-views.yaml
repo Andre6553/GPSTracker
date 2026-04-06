@@ -1,5 +1,6 @@
-# Lux Power — full dashboard `views:` (Battery + Solar PV + Grid + Inverter).
-# Paste as your dashboard `views:` list.
+# Lux Power — full dashboard `views:` (Battery, Solar PV, Grid, Inverter, Flow Chart).
+# Flow Chart uses HACS **Lux Power Distribution Card** (install + Resources).
+# Set `refresh.lux_dongles` to your dongle serial; use `button_location: none` to hide refresh.
 # https://www.home-assistant.io/dashboards/sections/
 
 views:
@@ -488,5 +489,71 @@ views:
                 name: Internal temp
               - entity: sensor.luxpower_inverter_load_percentage
                 name: Load %
+    cards: []
+    subview: false
+
+  - type: sections
+    title: Flow Chart
+    path: flow-chart
+    icon: mdi:solar-power-variant-outline
+    show_icon_and_title: true
+    max_columns: 1
+    dense_section_placement: true
+    badges: []
+    header:
+      layout: center
+      badges_position: bottom
+      badges_wrap: scroll
+    sections:
+      - type: grid
+        background: false
+        cards:
+          - type: heading
+            heading: Live energy flow
+            heading_style: title
+          - type: custom:lux-power-distribution-card
+            inverter_count: 1
+            battery:
+              soc_entities:
+                - sensor.luxpower_inverter_battery_battery_soc
+              charge_live_entities:
+                - sensor.luxpower_inverter_battery_battery_charge_power
+              discharge_live_entities:
+                - sensor.luxpower_inverter_battery_battery_discharge_power
+              voltage_entities:
+                - sensor.luxpower_inverter_battery_battery_voltage
+              parallel_average_voltage: false
+              capacity_ah_entities:
+                - sensor.luxpower_inverter_battery_battery_capacity
+              runtime_location: bottom
+            refresh:
+              lux_dongles:
+                - BA24401521
+              button_location: right
+            grid:
+              flow_entities:
+                - sensor.luxpower_inverter_grid_grid_flow
+              voltage_entities:
+                - sensor.luxpower_inverter_grid_grid_voltage
+              indicators:
+                hue: true
+                dot: false
+              parallel_average_voltage: false
+            consumption:
+              home_entities:
+                - sensor.luxpower_inverter_load_power
+            pv:
+              combined_entities:
+                - sensor.luxpower_inverter_pv_pv_power
+              array_1_entities:
+                - sensor.luxpower_inverter_pv_pv1_power
+              array_2_entities:
+                - sensor.luxpower_inverter_pv_pv2_power
+            temp:
+              entities:
+                - sensor.luxpower_inverter_internal_temperature
+            status_codes:
+              entities:
+                - sensor.luxpower_inverter_active_warning_code
     cards: []
     subview: false
