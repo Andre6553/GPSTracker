@@ -17,6 +17,7 @@ DEFAULT_PARAMS = [
     ("spatial_housetext", "1"),
     ("spatial_pctcorner", "1"),
     ("spatial_pctcss", "1"),
+    ("spatial_epsloadhide", "1"),
 ]
 
 if len(sys.argv) > 1:
