@@ -1,6 +1,7 @@
 # Lux Power — full dashboard `views:` (Battery, Solar PV, Grid, Inverter, Flow Chart).
 # Flow Chart uses HACS **Lux Power Distribution Card** (install + Resources).
-# Set `refresh.lux_dongles` to your dongle serial; use `button_location: none` to hide refresh.
+# Flow card refresh is hidden (`button_location: none`): it targets `luxpower.luxpower_refresh_registers`,
+# which exists only for the Guy Wells LuxpowerTek integration — yours uses a different service name.
 # https://www.home-assistant.io/dashboards/sections/
 
 views:
@@ -529,7 +530,7 @@ views:
             refresh:
               lux_dongles:
                 - BA24401521
-              button_location: right
+              button_location: none
             grid:
               flow_entities:
                 - sensor.luxpower_inverter_grid_grid_flow
