@@ -3,27 +3,17 @@
 # In HA: Developer tools → YAML → Reload automations (or restart Core).
 #
 # Vercel: set HOME_ASSISTANT_GATE_WEBHOOK_URL to your public HA base + path below.
-
-- id: trigger_gate_from_telegram_arrival
-  alias: Geofence Gate Arrival Trigger
-  trigger:
-    - platform: state
-      entity_id: sensor.andre_gate_status
-      to: "TRIGGERED_COOLDOWN"
-  action:
-    - service: switch.turn_on
-      target:
-        entity_id: switch.sonoff_1001dd6335
-    - delay: "00:00:00.700"
-    - service: switch.turn_off
-      target:
-        entity_id: switch.sonoff_1001dd6335
-  mode: single
+#
+# Gate pulse — ONE automation only:
+# Supabase `telegram-alerts` sets DB `TRIGGERED_COOLDOWN` AND POSTs the same webhook as
+# `/trigger_gate_*`. Pulsing again on REST `sensor.*_gate_status → TRIGGERED_COOLDOWN` doubles
+# the relay click (gate opens then stops). Keep the REST sensor for dashboards; do not attach a
+# second pulse to it.
 
 # Public URL (HTTPS) must reach Home Assistant, e.g. Nabu Casa / Cloudflare Tunnel:
 #   https://<your-ha>/api/webhook/vercel_gate_v1_a8f3c91d
 - id: telegram_gate_webhook_pulse
-  alias: Telegram Manual Gate (Vercel webhook)
+  alias: Gate pulse (Telegram manual + geofence auto via webhook)
   trigger:
     - platform: webhook
       webhook_id: vercel_gate_v1_a8f3c91d
