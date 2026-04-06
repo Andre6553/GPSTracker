@@ -562,10 +562,10 @@ views:
               home_entities:
                 - sensor.luxpower_inverter_load_power
               load_percentage_entity: sensor.luxpower_inverter_load_percentage
-              # Optional: EPS / critical load power — add entity id(s) matching inverter_count when you have a sensor.
-              # backup_entities:
-              #   - sensor.YOUR_EPS_OR_BACKUP_POWER
-              # Right column on the diagram: single entity “Allocated power” (not a list). Omit until you have one.
+              # EPS / backup (UPS) path — card uses this for arrows + “Backup Power” when home load is 0.
+              backup_entities:
+                - sensor.luxpower_inverter_eps_eps_power
+              # Optional: single entity “Allocated power” (right column when set). Omit if unused.
               # allocated_power_entity: sensor.YOUR_SUMMED_OR_MAIN_CIRCUIT_POWER
             pv:
               # Do not set combined_entities together with array_* — combined wins and you only see one total line.
