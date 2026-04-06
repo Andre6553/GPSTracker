@@ -11,6 +11,7 @@ DEFAULT_PARAMS = [
     ("spatial_pvlabels", "1"),
     ("spatial_gridhz", "1"),
     ("spatial_loadpct", "1"),
+    ("spatial_upscorner", "1"),
 ]
 
 if len(sys.argv) > 1:
