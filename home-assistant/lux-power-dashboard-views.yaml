@@ -1,6 +1,5 @@
-# Lux Power — full dashboard `views:` (Battery + Solar PV + Grid)
-# Paste into your dashboard raw YAML as the top-level `views:` list,
-# or merge these three `- type: sections` entries into your existing `views:`.
+# Lux Power — full dashboard (Battery, Solar PV, Grid, placeholder tab "New section")
+# Rename title/path of the last view; add cards under its sections[0].cards when ready.
 # https://www.home-assistant.io/dashboards/sections/
 
 views:
@@ -309,5 +308,23 @@ views:
                 name: Voltage
               - entity: sensor.luxpower_inverter_grid_grid_frequency
                 name: Frequency
+    cards: []
+    subview: false
+
+  - type: sections
+    title: New section
+    path: new-section
+    icon: mdi:view-dashboard-variant
+    show_icon_and_title: true
+    max_columns: 3
+    dense_section_placement: true
+    badges: []
+    header:
+      layout: center
+      badges_position: bottom
+      badges_wrap: scroll
+    sections:
+      - type: grid
+        cards: []
     cards: []
     subview: false
