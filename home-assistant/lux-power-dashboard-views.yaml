@@ -1,0 +1,313 @@
+# Lux Power — full dashboard `views:` (Battery + Solar PV + Grid)
+# Paste into your dashboard raw YAML as the top-level `views:` list,
+# or merge these three `- type: sections` entries into your existing `views:`.
+# https://www.home-assistant.io/dashboards/sections/
+
+views:
+  - type: sections
+    title: Battery SOC
+    path: battery-soc
+    icon: mdi:battery
+    show_icon_and_title: true
+    max_columns: 2
+    dense_section_placement: true
+    badges: []
+    header:
+      layout: center
+      badges_position: bottom
+      badges_wrap: scroll
+    sections:
+      - type: grid
+        background: false
+        cards:
+          - type: heading
+            heading: Live status
+            heading_style: title
+          - type: gauge
+            entity: sensor.luxpower_inverter_battery_battery_soc
+            name: State of charge
+            min: 0
+            max: 100
+            needle: true
+            segments:
+              - from: 0
+                color: "#c62828"
+              - from: 25
+                color: "#f9a825"
+              - from: 50
+                color: "#2e7d32"
+          - type: grid
+            columns: 3
+            square: false
+            cards:
+              - type: tile
+                entity: sensor.luxpower_inverter_battery_battery_voltage
+                name: Voltage
+                color: cyan
+              - type: tile
+                entity: sensor.luxpower_inverter_battery_battery_capacity
+                name: Capacity
+                color: indigo
+              - type: tile
+                entity: sensor.luxpower_inverter_battery_battery_parallel_number
+                name: Parallel strings
+                color: blue-grey
+              - type: tile
+                entity: sensor.luxpower_inverter_battery_battery_charge_power
+                name: Charge power
+                color: green
+              - type: tile
+                entity: sensor.luxpower_inverter_battery_battery_discharge_power
+                name: Discharge power
+                color: deep-orange
+      - type: grid
+        background: true
+        cards:
+          - type: heading
+            heading: Trends
+            heading_style: title
+          - type: history-graph
+            title: State of charge (48 h)
+            hours_to_show: 48
+            entities:
+              - entity: sensor.luxpower_inverter_battery_battery_soc
+                name: SOC
+          - type: history-graph
+            title: Pack power — charge vs discharge (48 h)
+            hours_to_show: 48
+            entities:
+              - entity: sensor.luxpower_inverter_battery_battery_charge_power
+                name: Charging
+              - entity: sensor.luxpower_inverter_battery_battery_discharge_power
+                name: Discharging
+    cards: []
+
+  - type: sections
+    title: Solar PV
+    path: solar-pv
+    icon: mdi:solar-panel
+    show_icon_and_title: true
+    max_columns: 3
+    dense_section_placement: true
+    badges: []
+    header:
+      layout: center
+      badges_position: bottom
+      badges_wrap: scroll
+    sections:
+      - type: grid
+        background: false
+        cards:
+          - type: heading
+            heading: PV Overview
+            heading_style: title
+          - type: gauge
+            entity: sensor.luxpower_inverter_pv_pv_power
+            name: Total PV Power
+            min: 0
+            max: 10000
+            needle: true
+            segments:
+              - from: 0
+                color: "#c62828"
+              - from: 1500
+                color: "#f9a825"
+              - from: 3500
+                color: "#2e7d32"
+          - type: grid
+            columns: 3
+            square: false
+            cards:
+              - type: tile
+                entity: sensor.luxpower_inverter_pv_pv_power
+                name: PV Power
+                color: amber
+              - type: tile
+                entity: sensor.luxpower_inverter_pv_pv_energy_today
+                name: Today
+                color: green
+              - type: tile
+                entity: sensor.luxpower_inverter_pv_pv_energy_total
+                name: Total
+                color: indigo
+      - type: grid
+        background: true
+        cards:
+          - type: heading
+            heading: PV1
+            heading_style: title
+          - type: grid
+            columns: 2
+            square: false
+            cards:
+              - type: tile
+                entity: sensor.luxpower_inverter_pv_pv1_power
+                name: Power
+                color: amber
+              - type: tile
+                entity: sensor.luxpower_inverter_pv_pv1_voltage
+                name: Voltage
+                color: cyan
+              - type: tile
+                entity: sensor.luxpower_inverter_pv_pv1_current
+                name: Current
+                color: deep-purple
+              - type: tile
+                entity: sensor.luxpower_inverter_pv_pv1_energy_today
+                name: Energy today
+                color: green
+              - type: tile
+                entity: sensor.luxpower_inverter_pv_pv1_energy_total
+                name: Energy total
+                color: indigo
+      - type: grid
+        background: true
+        cards:
+          - type: heading
+            heading: PV2
+            heading_style: title
+          - type: grid
+            columns: 2
+            square: false
+            cards:
+              - type: tile
+                entity: sensor.luxpower_inverter_pv_pv2_power
+                name: Power
+                color: amber
+              - type: tile
+                entity: sensor.luxpower_inverter_pv_pv2_voltage
+                name: Voltage
+                color: cyan
+              - type: tile
+                entity: sensor.luxpower_inverter_pv_pv2_current
+                name: Current
+                color: deep-purple
+              - type: tile
+                entity: sensor.luxpower_inverter_pv_pv2_energy_today
+                name: Energy today
+                color: green
+              - type: tile
+                entity: sensor.luxpower_inverter_pv_pv2_energy_total
+                name: Energy total
+                color: indigo
+      - type: grid
+        cards:
+          - type: heading
+            heading: Trends (48 h)
+            heading_style: title
+          - type: history-graph
+            title: PV Power
+            hours_to_show: 48
+            entities:
+              - entity: sensor.luxpower_inverter_pv_pv_power
+                name: Total PV
+              - entity: sensor.luxpower_inverter_pv_pv1_power
+                name: PV1
+              - entity: sensor.luxpower_inverter_pv_pv2_power
+                name: PV2
+    cards: []
+    subview: false
+
+  - type: sections
+    title: Grid
+    path: grid
+    icon: mdi:power-plug
+    show_icon_and_title: true
+    max_columns: 2
+    dense_section_placement: true
+    badges:
+      - type: entity
+        entity: binary_sensor.luxpower_inverter_grid_grid_connected
+        show_name: false
+        show_state: true
+        show_icon: true
+        color: green
+    header:
+      layout: center
+      badges_position: bottom
+      badges_wrap: scroll
+    sections:
+      - type: grid
+        background: false
+        cards:
+          - type: heading
+            heading: Live status
+            heading_style: title
+          - type: gauge
+            entity: sensor.luxpower_inverter_grid_power_from_grid
+            name: Power from grid
+            min: 0
+            max: 10000
+            needle: true
+            segments:
+              - from: 0
+                color: "#2e7d32"
+              - from: 2500
+                color: "#f9a825"
+              - from: 6000
+                color: "#c62828"
+          - type: grid
+            columns: 2
+            square: false
+            cards:
+              - type: tile
+                entity: binary_sensor.luxpower_inverter_grid_grid_connected
+                name: Grid connected
+                color: green
+              - type: tile
+                entity: sensor.luxpower_inverter_grid_grid_flow
+                name: Grid flow
+                color: deep-purple
+              - type: tile
+                entity: sensor.luxpower_inverter_grid_power_from_grid
+                name: Power from grid
+                color: amber
+      - type: grid
+        background: true
+        cards:
+          - type: heading
+            heading: Quality & Energy
+            heading_style: title
+          - type: grid
+            columns: 2
+            square: false
+            cards:
+              - type: tile
+                entity: sensor.luxpower_inverter_grid_grid_voltage
+                name: Voltage
+                color: cyan
+              - type: tile
+                entity: sensor.luxpower_inverter_grid_grid_frequency
+                name: Frequency
+                color: blue
+              - type: tile
+                entity: sensor.luxpower_inverter_grid_energy_from_grid_today
+                name: From grid today
+                color: green
+              - type: tile
+                entity: sensor.luxpower_inverter_grid_energy_from_grid_total
+                name: From grid total
+                color: indigo
+      - type: grid
+        cards:
+          - type: heading
+            heading: Trends (48 h)
+            heading_style: title
+          - type: history-graph
+            title: Grid power and flow
+            hours_to_show: 48
+            entities:
+              - entity: sensor.luxpower_inverter_grid_power_from_grid
+                name: Power from grid
+              - entity: sensor.luxpower_inverter_grid_grid_flow
+                name: Grid flow
+          - type: history-graph
+            title: Grid quality
+            hours_to_show: 48
+            entities:
+              - entity: sensor.luxpower_inverter_grid_grid_voltage
+                name: Voltage
+              - entity: sensor.luxpower_inverter_grid_grid_frequency
+                name: Frequency
+    cards: []
+    subview: false
