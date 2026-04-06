@@ -9,7 +9,8 @@
 # https://github.com/DanteWinters/lux-power-distribution-card/blob/v2.0.1/docs/images/full-card-allocated-power.png
 # Allocated band: consumption.allocated_power_entity (singular entity id). PV1/PV2 lines: array_1/2 only — omit combined_entities
 # if you want those lines (combined_entities hides per-string text). This card does not draw PV voltages in the diagram.
-# Grid Hz: view badge. Optional EPS: consumption.backup_entities (see card docs).
+# Grid Hz on the flow diagram: patched card `grid.frequency_entities` (repo `www/lux-power-distribution-card.js`).
+# Optional EPS: consumption.backup_entities (see card docs).
 # https://www.home-assistant.io/dashboards/sections/
 
 views:
@@ -550,6 +551,8 @@ views:
                 - sensor.luxpower_inverter_grid_grid_flow
               voltage_entities:
                 - sensor.luxpower_inverter_grid_grid_voltage
+              frequency_entities:
+                - sensor.luxpower_inverter_grid_grid_frequency
               indicators:
                 hue: true
                 dot: false
