@@ -1,5 +1,5 @@
 # Lux Power — Battery dashboard (sections view)
-# Confirmed entities only. Layout: one live panel + trends (% vs W separated).
+# Mirrors live HA config: no header markdown card, no badges (minimal header).
 # https://www.home-assistant.io/dashboards/sections/
 
 views:
@@ -10,21 +10,8 @@ views:
     show_icon_and_title: true
     max_columns: 2
     dense_section_placement: true
-    badges:
-      - type: entity
-        entity: sensor.luxpower_inverter_battery_battery_soc
-        show_name: false
-        show_state: true
-        show_icon: true
-        show_entity_picture: true
-        color: green
+    badges: []
     header:
-      card:
-        type: markdown
-        text_only: true
-        content: |
-          ## Battery
-          Live pack status and 48-hour trends
       layout: center
       badges_position: bottom
       badges_wrap: scroll
