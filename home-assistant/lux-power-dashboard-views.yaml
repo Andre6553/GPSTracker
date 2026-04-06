@@ -1,5 +1,5 @@
-# Lux Power — full dashboard `views:` (Battery SOC + Solar PV + Grid).
-# Paste as your dashboard `views:` list. Add an Inverter tab after you share entity IDs.
+# Lux Power — full dashboard `views:` (Battery + Solar PV + Grid + Inverter).
+# Paste as your dashboard `views:` list.
 # https://www.home-assistant.io/dashboards/sections/
 
 views:
@@ -308,5 +308,185 @@ views:
                 name: Voltage
               - entity: sensor.luxpower_inverter_grid_grid_frequency
                 name: Frequency
+    cards: []
+    subview: false
+
+  - type: sections
+    title: Inverter
+    path: inverter
+    icon: mdi:current-ac
+    show_icon_and_title: true
+    max_columns: 2
+    dense_section_placement: true
+    badges: []
+    header:
+      layout: center
+      badges_position: bottom
+      badges_wrap: scroll
+    sections:
+      - type: grid
+        background: false
+        cards:
+          - type: heading
+            heading: Live power
+            heading_style: title
+          - type: gauge
+            entity: sensor.luxpower_inverter_energy_flow
+            name: Energy flow
+            min: 0
+            max: 10000
+            needle: true
+            segments:
+              - from: 0
+                color: "#c62828"
+              - from: 2500
+                color: "#f9a825"
+              - from: 5000
+                color: "#2e7d32"
+          - type: gauge
+            entity: sensor.luxpower_inverter_load_percentage
+            name: Load
+            min: 0
+            max: 100
+            needle: true
+            segments:
+              - from: 0
+                color: "#2e7d32"
+              - from: 70
+                color: "#f9a825"
+              - from: 90
+                color: "#c62828"
+          - type: grid
+            columns: 2
+            square: false
+            cards:
+              - type: tile
+                entity: sensor.luxpower_inverter_load_power
+                name: Load power
+                color: amber
+              - type: tile
+                entity: sensor.luxpower_inverter_inverter_power
+                name: Inverter power
+                color: deep-purple
+              - type: tile
+                entity: sensor.luxpower_inverter_inverter_current
+                name: Inverter current
+                color: cyan
+              - type: tile
+                entity: sensor.luxpower_inverter_internal_temperature
+                name: Internal temp
+                color: orange
+              - type: tile
+                entity: sensor.luxpower_inverter_ac_charging_rectification_power
+                name: AC charge rect.
+                color: green
+
+      - type: grid
+        background: true
+        cards:
+          - type: heading
+            heading: AC & energy
+            heading_style: title
+          - type: grid
+            columns: 2
+            square: false
+            cards:
+              - type: tile
+                entity: sensor.luxpower_inverter_ac_input_type
+                name: AC input
+                color: blue
+              - type: tile
+                entity: sensor.luxpower_inverter_ac_charge_energy_today
+                name: AC charge today
+                color: green
+              - type: tile
+                entity: sensor.luxpower_inverter_ac_charge_energy_total
+                name: AC charge total
+                color: indigo
+              - type: tile
+                entity: sensor.luxpower_inverter_charge_energy_today
+                name: Charge today
+                color: green
+              - type: tile
+                entity: sensor.luxpower_inverter_discharge_energy_today
+                name: Discharge today
+                color: deep-orange
+              - type: tile
+                entity: sensor.luxpower_inverter_inverter_energy_today
+                name: Inverter energy today
+                color: green
+              - type: tile
+                entity: sensor.luxpower_inverter_inverter_energy_total
+                name: Inverter energy total
+                color: indigo
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Status & runtime
+            heading_style: title
+          - type: entities
+            title: Warnings & faults
+            state_color: true
+            show_header_toggle: false
+            entities:
+              - entity: sensor.luxpower_inverter_active_warning_code
+                name: Warning code
+              - entity: sensor.luxpower_inverter_active_warning_text
+                name: Warning text
+              - entity: sensor.luxpower_inverter_internal_fault_code
+                name: Internal fault code
+              - type: divider
+              - entity: sensor.luxpower_inverter_total_running_time
+                name: Running time (raw)
+          - type: markdown
+            title: Running time (days · hours · sec)
+            content: |
+              {% set ent = states.sensor.luxpower_inverter_total_running_time %}
+              {% set raw = ent.state %}
+              {% if raw in ['unknown', 'unavailable', 'none', ''] %}
+              *Sensor unavailable*
+              {% else %}
+              {% set v = raw | float(0) %}
+              {% set u = (ent.attributes.get('unit_of_measurement', '') | string | lower) %}
+              {% if 'h' == u or 'hour' in u %}
+                {% set sec = (v * 3600) | round(0) | int %}
+              {% elif 'min' in u %}
+                {% set sec = (v * 60) | round(0) | int %}
+              {% elif 's' == u or 'sec' in u %}
+                {% set sec = v | int %}
+              {% else %}
+                {% set sec = v | int %}
+              {% endif %}
+              {% set d = (sec // 86400) %}
+              {% set h = ((sec % 86400) // 3600) %}
+              {% set srem = (sec - d * 86400 - h * 3600) %}
+              **{{ d }}** days · **{{ h }}** h · **{{ srem }}** s  
+              <small>After full days and hours, remainder is seconds (0–3599). Unit hint: {{ u | default('(n/a)', true) }}</small>
+              {% endif %}
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Trends (48 h)
+            heading_style: title
+          - type: history-graph
+            title: Power & flow
+            hours_to_show: 48
+            entities:
+              - entity: sensor.luxpower_inverter_energy_flow
+                name: Energy flow
+              - entity: sensor.luxpower_inverter_load_power
+                name: Load power
+              - entity: sensor.luxpower_inverter_inverter_power
+                name: Inverter power
+          - type: history-graph
+            title: Temperature & load
+            hours_to_show: 48
+            entities:
+              - entity: sensor.luxpower_inverter_internal_temperature
+                name: Internal temp
+              - entity: sensor.luxpower_inverter_load_percentage
+                name: Load %
     cards: []
     subview: false
