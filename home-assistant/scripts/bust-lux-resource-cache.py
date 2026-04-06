@@ -7,7 +7,11 @@ import sys
 path = "/var/lib/homeassistant/homeassistant/.storage/lovelace_resources"
 
 # Keys avoid clashing with hacstag= — append only if missing.
-DEFAULT_PARAMS = [("spatial_pvlabels", "1"), ("spatial_gridhz", "1")]
+DEFAULT_PARAMS = [
+    ("spatial_pvlabels", "1"),
+    ("spatial_gridhz", "1"),
+    ("spatial_loadpct", "1"),
+]
 
 if len(sys.argv) > 1:
     path = sys.argv[1]

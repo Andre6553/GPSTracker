@@ -10,6 +10,7 @@
 # Allocated band: consumption.allocated_power_entity (singular entity id). PV1/PV2 lines: array_1/2 only — omit combined_entities
 # if you want those lines (combined_entities hides per-string text). This card does not draw PV voltages in the diagram.
 # Grid Hz on the flow diagram: patched card `grid.frequency_entities` (repo `www/lux-power-distribution-card.js`).
+# Optional: consumption.load_percentage_entity (patch) — bottom-right “Load %” on flow card.
 # Optional EPS: consumption.backup_entities (see card docs).
 # https://www.home-assistant.io/dashboards/sections/
 
@@ -560,6 +561,7 @@ views:
             consumption:
               home_entities:
                 - sensor.luxpower_inverter_load_power
+              load_percentage_entity: sensor.luxpower_inverter_load_percentage
               # Optional: EPS / critical load power — add entity id(s) matching inverter_count when you have a sensor.
               # backup_entities:
               #   - sensor.YOUR_EPS_OR_BACKUP_POWER
