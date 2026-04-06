@@ -1,14 +1,14 @@
 # Deploy patched lux-power-distribution-card.js to Home Assistant on the NUC and refresh Lovelace resource cache-busters.
 # Prereqs: OpenSSH client, SSH key to the NUC (or ssh-agent), passwordless sudo for copying into /var/lib/homeassistant/...
 #
-# Defaults match docs/RUNBOOK.md — override with -Host / -User.
+# Default SSH host is `nuc` (~/.ssh/config); override with -NucHost e.g. 192.168.10.173 (RUNBOOK).
 #
 # Usage (from repo root):
-#   pwsh home-assistant/scripts/deploy-lux-card-to-nuc.ps1
-#   pwsh home-assistant/scripts/deploy-lux-card-to-nuc.ps1 -NucHost 192.168.10.173 -User andre
+#   powershell -ExecutionPolicy Bypass -File home-assistant/scripts/deploy-lux-card-to-nuc.ps1
+#   powershell ... -File ... -NucHost 192.168.10.173 -User andre
 
 param(
-    [string] $NucHost = "192.168.10.173",
+    [string] $NucHost = "nuc",
     [string] $User = "andre",
     [string] $HaConfigRoot = "/var/lib/homeassistant/homeassistant",
     [string] $CardRelPath = "www/community/lux-power-distribution-card/lux-power-distribution-card.js"
