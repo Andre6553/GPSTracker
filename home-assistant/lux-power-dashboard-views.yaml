@@ -2,8 +2,8 @@
 # Flow Chart uses HACS **Lux Power Distribution Card** (install + Resources).
 # Flow card refresh is hidden (`button_location: none`): it targets `luxpower.luxpower_refresh_registers`,
 # which exists only for the Guy Wells LuxpowerTek integration — yours uses a different service name.
-# Flow chart extras: grid Hz tile + PV1+PV2 vs inverter markdown (card has no Hz field). For EPS/UPS on the
-# card, add consumption.backup_entities with your backup-power entity from States (see card config.md).
+# Flow chart: only the custom card in the section (PV1/PV2 drawn by the card from array_1/2_entities).
+# Grid Hz is a view badge — not under the diagram. EPS: optional consumption.backup_entities in YAML.
 # https://www.home-assistant.io/dashboards/sections/
 
 views:
@@ -502,7 +502,13 @@ views:
     show_icon_and_title: true
     max_columns: 1
     dense_section_placement: true
-    badges: []
+    badges:
+      - type: entity
+        entity: sensor.luxpower_inverter_grid_grid_frequency
+        show_name: true
+        show_state: true
+        show_icon: true
+        color: blue
     header:
       layout: center
       badges_position: bottom
@@ -558,21 +564,5 @@ views:
             status_codes:
               entities:
                 - sensor.luxpower_inverter_active_warning_code
-          - type: grid
-            columns: 3
-            square: false
-            cards:
-              - type: tile
-                entity: sensor.luxpower_inverter_grid_grid_frequency
-                name: Grid frequency
-                color: blue
-              - type: markdown
-                title: PV combined check (PV1 + PV2 vs inverter)
-                content: |
-                  {% set p1 = states('sensor.luxpower_inverter_pv_pv1_power') | float(0) %}
-                  {% set p2 = states('sensor.luxpower_inverter_pv_pv2_power') | float(0) %}
-                  {% set inv = states('sensor.luxpower_inverter_pv_pv_power') | float(0) %}
-                  **PV1+PV2:** {{ (p1 + p2) | round(0) }} W  ·  **Inverter PV:** {{ inv | round(0) }} W
-                  <small>Card solar block uses the same entities; this line is a sanity check.</small>
     cards: []
     subview: false
