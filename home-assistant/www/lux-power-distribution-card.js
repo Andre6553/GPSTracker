@@ -410,14 +410,14 @@ var VA=2,MA=function(){return s(function A(t){o(this,A)},[{key:"_$AU",get:functi
                     <div id="home-info" class="cell text-cell">
                       ${HA(tA)}
                     </div>
+                    <div id="home-image" class="cell image-cell">
+                      <img src="${At($A.HomeNormal)}" />
+                    </div>
                     ${(null===(U=this._config)||void 0===U?void 0:U.consumption.load_percentage_entity)||(null===(x=this._config)||void 0===x?void 0:x.consumption.ups_enabled_entity)||(null!==(F=null===(j=null===(R=this._config)||void 0===R?void 0:R.consumption.backup_entities)||void 0===j?void 0:j.length)&&void 0!==F?F:0)>0?fA`
                           <div id="load-pct-info" class="cell text-cell">
                             ${HA(nA)}
                           </div>
                         `:fA`<div class="cell"></div>`}
-                    <div id="home-image" class="cell image-cell">
-                      <img src="${At($A.HomeNormal)}" />
-                    </div>
                     <div class="cell"></div>
                     <div class="cell"></div>
                   `}

@@ -14,6 +14,7 @@ DEFAULT_PARAMS = [
     ("spatial_upscorner", "1"),
     ("spatial_gridups", "1"),
     ("spatial_homelayout", "1"),
+    ("spatial_housetext", "1"),
 ]
 
 if len(sys.argv) > 1:
