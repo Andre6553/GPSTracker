@@ -46,5 +46,8 @@ secrets.h
 # local HA deploy copy (may contain API keys)
 homeassistant/configuration.yaml
 
+# vendored lux card build tree (rebuilt from upstream tag when updating www bundle)
+home-assistant/_vendor_lux_card/
+
 # local telemetry exports / fleet dumps
 /logs/

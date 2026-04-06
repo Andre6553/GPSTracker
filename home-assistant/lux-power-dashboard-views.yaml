@@ -1,5 +1,8 @@
 # Lux Power — full dashboard `views:` (Battery, Solar PV, Grid, Inverter, Flow Chart).
-# Flow Chart uses HACS **Lux Power Distribution Card** (install + Resources).
+# Flow Chart uses **Lux Power Distribution Card**. Prefer this repo build (PV1/PV2 labels + Total under strings):
+# copy `home-assistant/www/lux-power-distribution-card.js` over the HACS file
+# `config/www/community/lux-power-distribution-card/lux-power-distribution-card.js` (backup first), then hard-refresh.
+# Or serve from `config/www/` and add Resource `/local/lux-power-distribution-card.js` (module) — remove the duplicate HACS resource.
 # Flow card refresh is hidden (`button_location: none`): it targets `luxpower.luxpower_refresh_registers`,
 # which exists only for the Guy Wells LuxpowerTek integration — yours uses a different service name.
 # Flow chart: Lux Power Distribution Card — same as gallery “allocated power” screenshot:
