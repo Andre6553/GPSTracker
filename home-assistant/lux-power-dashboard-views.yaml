@@ -4,8 +4,9 @@
 # which exists only for the Guy Wells LuxpowerTek integration — yours uses a different service name.
 # Flow chart: Lux Power Distribution Card — same as gallery “allocated power” screenshot:
 # https://github.com/DanteWinters/lux-power-distribution-card/blob/v2.0.1/docs/images/full-card-allocated-power.png
-# Enable the extra “allocated” slice with consumption.allocated_power_entities (power sensors summed by the card).
-# PV1/PV2: array_1/2_entities. Grid Hz: view badge. Optional EPS: consumption.backup_entities.
+# Allocated band: consumption.allocated_power_entity (singular entity id). PV1/PV2 lines: array_1/2 only — omit combined_entities
+# if you want those lines (combined_entities hides per-string text). This card does not draw PV voltages in the diagram.
+# Grid Hz: view badge. Optional EPS: consumption.backup_entities (see card docs).
 # https://www.home-assistant.io/dashboards/sections/
 
 views:
@@ -553,12 +554,13 @@ views:
             consumption:
               home_entities:
                 - sensor.luxpower_inverter_load_power
-              # Per card docs: sensors whose power is summed for the “allocated” band (see full-card-allocated-power.png).
-              # Replace with your device power entities (e.g. smart plugs), or remove key until you have some.
-              allocated_power_entities: []
+              # Optional: EPS / critical load power — add entity id(s) matching inverter_count when you have a sensor.
+              # backup_entities:
+              #   - sensor.YOUR_EPS_OR_BACKUP_POWER
+              # Right column on the diagram: single entity “Allocated power” (not a list). Omit until you have one.
+              # allocated_power_entity: sensor.YOUR_SUMMED_OR_MAIN_CIRCUIT_POWER
             pv:
-              combined_entities:
-                - sensor.luxpower_inverter_pv_pv_power
+              # Do not set combined_entities together with array_* — combined wins and you only see one total line.
               array_1_entities:
                 - sensor.luxpower_inverter_pv_pv1_power
               array_2_entities:
