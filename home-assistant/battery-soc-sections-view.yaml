@@ -1,0 +1,110 @@
+# Lux Power — "Battery SOC" sections view (template)
+# Paste into your dashboard raw YAML, or replace only this view in `views:`.
+#
+# 1) Fix spelling: title/path use "battery" not "batery".
+# 2) Developer tools → States → search: luxpower_inverter_battery
+#    Delete or rename any entity rows below that are unavailable.
+# Sections view reference: https://www.home-assistant.io/dashboards/sections/
+
+views:
+  - type: sections
+    title: Battery SOC
+    path: battery-soc
+    icon: mdi:battery
+    show_icon_and_title: true
+    max_columns: 3
+    dense_section_placement: false
+    badges:
+      - type: entity
+        entity: sensor.luxpower_inverter_battery_battery_soc
+        show_name: false
+        show_state: true
+        show_icon: true
+        show_entity_picture: true
+        color: green
+    header:
+      card:
+        type: markdown
+        text_only: true
+        content: |
+          ## Battery
+          State of charge and DC-side metrics
+      layout: center
+      badges_position: bottom
+      badges_wrap: scroll
+    sections:
+      - type: grid
+        background: false
+        cards:
+          - type: heading
+            heading: Overview
+            heading_style: title
+          - type: gauge
+            entity: sensor.luxpower_inverter_battery_battery_soc
+            name: State of charge
+            min: 0
+            max: 100
+            needle: true
+            segments:
+              - from: 0
+                color: "#c62828"
+              - from: 25
+                color: "#f9a825"
+              - from: 50
+                color: "#2e7d32"
+          - type: tile
+            entity: sensor.luxpower_inverter_battery_battery_soc
+            name: SOC
+            color: green
+          - type: tile
+            entity: sensor.luxpower_inverter_battery_battery_voltage_live
+            name: Voltage
+            color: cyan
+          - type: tile
+            entity: sensor.luxpower_inverter_battery_battery_flow_live
+            name: Battery flow
+            color: deep-purple
+          - type: tile
+            entity: sensor.luxpower_inverter_battery_battery_temperature_live
+            name: Cell temp
+            color: orange
+      - type: grid
+        background: true
+        cards:
+          - type: heading
+            heading: History
+            heading_style: title
+          - type: history-graph
+            title: SOC — last 48 h
+            hours_to_show: 48
+            entities:
+              - entity: sensor.luxpower_inverter_battery_battery_soc
+                name: SOC
+      - type: grid
+        cards:
+          - type: heading
+            heading: Details
+            heading_style: title
+          - type: entities
+            title: Battery & BMS
+            state_color: true
+            show_header_toggle: false
+            entities:
+              - entity: sensor.luxpower_inverter_battery_battery_soc
+                name: State of charge
+              - type: divider
+              - entity: sensor.luxpower_inverter_battery_battery_voltage_live
+                name: Voltage
+              - entity: sensor.luxpower_inverter_battery_battery_flow_live
+                name: Battery flow (signed)
+              - entity: sensor.luxpower_inverter_battery_battery_charge_power_live
+                name: Charge power
+              - entity: sensor.luxpower_inverter_battery_bms_battery_current_live
+                name: BMS current
+              - entity: sensor.luxpower_inverter_battery_battery_temperature_live
+                name: Temperature
+              - entity: sensor.luxpower_inverter_battery_battery_capacity_ah
+                name: Capacity (Ah)
+              - entity: sensor.luxpower_inverter_battery_battery_soh_live
+                name: State of health (SOH)
+    cards: []
