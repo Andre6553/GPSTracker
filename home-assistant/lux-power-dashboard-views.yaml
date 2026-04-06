@@ -563,7 +563,7 @@ views:
               home_entities:
                 - sensor.luxpower_inverter_load_power
               load_percentage_entity: sensor.luxpower_inverter_load_percentage
-              # When on: red box primary = UPS + eps power. When off: Load + load_power. (Change if your “UPS on” entity differs.)
+              # When on: red box primary = UPS + eps power. Patched card also treats UPS when grid voltage < ~30 V (0 Vac backup).
               ups_enabled_entity: switch.luxpower_inverter_seamless_eps_switching
               # EPS / backup (UPS) path — card uses this for arrows + EPS watts in the red box when UPS on.
               backup_entities:
