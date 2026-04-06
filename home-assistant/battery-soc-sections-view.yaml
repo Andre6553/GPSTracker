@@ -1,6 +1,5 @@
 # Lux Power — Battery dashboard (sections view)
-# Confirmed entities only (no *_live placeholders).
-# Paste into dashboard raw YAML, or merge this view into `views:`.
+# Confirmed entities only. Layout: one live panel + trends (% vs W separated).
 # https://www.home-assistant.io/dashboards/sections/
 
 views:
@@ -9,8 +8,8 @@ views:
     path: battery-soc
     icon: mdi:battery
     show_icon_and_title: true
-    max_columns: 3
-    dense_section_placement: false
+    max_columns: 2
+    dense_section_placement: true
     badges:
       - type: entity
         entity: sensor.luxpower_inverter_battery_battery_soc
@@ -25,7 +24,7 @@ views:
         text_only: true
         content: |
           ## Battery
-          State of charge, DC bus, and pack power
+          Live pack status and 48-hour trends
       layout: center
       badges_position: bottom
       badges_wrap: scroll
@@ -34,7 +33,7 @@ views:
         background: false
         cards:
           - type: heading
-            heading: Snapshot
+            heading: Live status
             heading_style: title
           - type: gauge
             entity: sensor.luxpower_inverter_battery_battery_soc
@@ -49,68 +48,48 @@ views:
                 color: "#f9a825"
               - from: 50
                 color: "#2e7d32"
-          - type: tile
-            entity: sensor.luxpower_inverter_battery_battery_voltage
-            name: Voltage
-            color: cyan
-          - type: tile
-            entity: sensor.luxpower_inverter_battery_battery_capacity
-            name: Capacity
-            color: indigo
-          - type: tile
-            entity: sensor.luxpower_inverter_battery_battery_parallel_number
-            name: Parallel strings
-            color: blue-grey
+          - type: grid
+            columns: 3
+            square: false
+            cards:
+              - type: tile
+                entity: sensor.luxpower_inverter_battery_battery_voltage
+                name: Voltage
+                color: cyan
+              - type: tile
+                entity: sensor.luxpower_inverter_battery_battery_capacity
+                name: Capacity
+                color: indigo
+              - type: tile
+                entity: sensor.luxpower_inverter_battery_battery_parallel_number
+                name: Parallel strings
+                color: blue-grey
+              - type: tile
+                entity: sensor.luxpower_inverter_battery_battery_charge_power
+                name: Charge power
+                color: green
+              - type: tile
+                entity: sensor.luxpower_inverter_battery_battery_discharge_power
+                name: Discharge power
+                color: deep-orange
       - type: grid
         background: true
         cards:
           - type: heading
-            heading: Power
-            heading_style: title
-          - type: tile
-            entity: sensor.luxpower_inverter_battery_battery_charge_power
-            name: Charge power
-            color: green
-          - type: tile
-            entity: sensor.luxpower_inverter_battery_battery_discharge_power
-            name: Discharge power
-            color: deep-orange
-      - type: grid
-        cards:
-          - type: heading
-            heading: Details
-            heading_style: title
-          - type: entities
-            title: All metrics
-            state_color: true
-            show_header_toggle: false
-            entities:
-              - entity: sensor.luxpower_inverter_battery_battery_soc
-                name: State of charge
-              - type: divider
-              - entity: sensor.luxpower_inverter_battery_battery_voltage
-                name: Voltage
-              - entity: sensor.luxpower_inverter_battery_battery_capacity
-                name: Capacity
-              - entity: sensor.luxpower_inverter_battery_battery_parallel_number
-                name: Parallel number
-              - entity: sensor.luxpower_inverter_battery_battery_charge_power
-                name: Charge power
-              - entity: sensor.luxpower_inverter_battery_battery_discharge_power
-                name: Discharge power
-      - type: grid
-        cards:
-          - type: heading
-            heading: History
+            heading: Trends
             heading_style: title
           - type: history-graph
-            title: SOC and power — last 48 h
+            title: State of charge (48 h)
             hours_to_show: 48
             entities:
               - entity: sensor.luxpower_inverter_battery_battery_soc
                 name: SOC
+          - type: history-graph
+            title: Pack power — charge vs discharge (48 h)
+            hours_to_show: 48
+            entities:
               - entity: sensor.luxpower_inverter_battery_battery_charge_power
-                name: Charge
+                name: Charging
               - entity: sensor.luxpower_inverter_battery_battery_discharge_power
-                name: Discharge
+                name: Discharging
     cards: []
