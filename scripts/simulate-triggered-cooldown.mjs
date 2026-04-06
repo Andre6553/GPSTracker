@@ -143,6 +143,8 @@ const base = existing ?? {
   last_distance_m: null,
   last_trigger_at: null,
   cooldown_until: null,
+  seen_left_home_alert: false,
+  seen_geofence_armed_alert: false,
 };
 
 const row = reset
@@ -155,6 +157,8 @@ const row = reset
       last_distance_m: null,
       last_trigger_at: null,
       cooldown_until: null,
+      seen_left_home_alert: false,
+      seen_geofence_armed_alert: false,
       updated_at: now.toISOString(),
     }
   : {

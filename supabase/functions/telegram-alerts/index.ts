@@ -47,6 +47,10 @@ interface GateStateRow {
   last_distance_m: number | null;
   last_trigger_at: string | null;
   cooldown_until: string | null;
+  /** Set when device crosses Home geofence outward (same moment as zone LEFT). */
+  seen_left_home_alert: boolean;
+  /** Set when "Geofence Armed" Telegram is sent (AWAY_CONFIRMED). */
+  seen_geofence_armed_alert: boolean;
 }
 
 const OUTER_RADIUS_OFFSET_M = Number(Deno.env.get('OUTER_RADIUS_OFFSET_M') ?? '250');
@@ -102,6 +106,72 @@ async function resolveTelegramChatIds(userId: string, legacyChatId: unknown): Pr
 
 async function sendTelegramBroadcast(chatIds: string[], text: string) {
   await Promise.allSettled(chatIds.map((id) => sendTelegram(id, text)));
+}
+
+/** Same boundary as zone alert for named Home — auto gate will not open until this flips true and Geofence Armed was sent. */
+async function markGateLeftHomePrerequisite(userId: string, deviceId: string) {
+  const { data: existing } = await supabase
+    .from('device_gate_state')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('device_id', deviceId)
+    .maybeSingle();
+  const now = new Date().toISOString();
+  const base: GateStateRow = existing
+    ? rowToGateState(existing)
+    : {
+        user_id: userId,
+        device_id: deviceId,
+        status: 'HOME',
+        outside_since: null,
+        driving_since: null,
+        inside_streak: 0,
+        last_distance_m: null,
+        last_trigger_at: null,
+        cooldown_until: null,
+        seen_left_home_alert: false,
+        seen_geofence_armed_alert: false,
+      };
+  await supabase.from('device_gate_state').upsert(
+    {
+      ...gateStateToRow(base),
+      seen_left_home_alert: true,
+      updated_at: now,
+    },
+    { onConflict: 'user_id,device_id' },
+  );
+}
+
+function rowToGateState(row: Record<string, unknown>): GateStateRow {
+  return {
+    user_id: String(row.user_id),
+    device_id: String(row.device_id),
+    status: row.status as GateStatus,
+    outside_since: row.outside_since != null ? String(row.outside_since) : null,
+    driving_since: row.driving_since != null ? String(row.driving_since) : null,
+    inside_streak: Number(row.inside_streak ?? 0),
+    last_distance_m: row.last_distance_m != null ? Number(row.last_distance_m) : null,
+    last_trigger_at: row.last_trigger_at != null ? String(row.last_trigger_at) : null,
+    cooldown_until: row.cooldown_until != null ? String(row.cooldown_until) : null,
+    seen_left_home_alert: Boolean(row.seen_left_home_alert),
+    seen_geofence_armed_alert: Boolean(row.seen_geofence_armed_alert),
+  };
+}
+
+function gateStateToRow(s: GateStateRow): Record<string, unknown> {
+  return {
+    user_id: s.user_id,
+    device_id: s.device_id,
+    status: s.status,
+    outside_since: s.outside_since,
+    driving_since: s.driving_since,
+    inside_streak: s.inside_streak,
+    last_distance_m: s.last_distance_m,
+    last_trigger_at: s.last_trigger_at,
+    cooldown_until: s.cooldown_until,
+    seen_left_home_alert: s.seen_left_home_alert,
+    seen_geofence_armed_alert: s.seen_geofence_armed_alert,
+  };
 }
 
 Deno.serve(async (req: Request) => {
@@ -196,43 +266,47 @@ Deno.serve(async (req: Request) => {
         homeZone = zone;
       }
 
-      if (geofenceAlertsOn) {
-        const zLat = Number(zone.lat);
-        const zLon = Number(zone.lon);
-        const radiusM = Number(zone.radius_meters);
-        if (!Number.isFinite(zLat) || !Number.isFinite(zLon) || !Number.isFinite(radiusM)) {
-          console.warn('telegram-alerts: skipping geofence with bad coords', zone.id, zone.name);
-          continue;
-        }
-        const isInside = haversineKm(lat, lon, zLat, zLon) * 1000 <= radiusM;
-        
-        // Get previous status
-        const { data: statusRecord } = await supabase
-          .from('device_geofence_status')
-          .select('is_inside')
-          .eq('device_id', device_id)
-          .eq('geofence_id', zone.id)
-          .maybeSingle();
+      const zLat = Number(zone.lat);
+      const zLon = Number(zone.lon);
+      const radiusM = Number(zone.radius_meters);
+      if (!Number.isFinite(zLat) || !Number.isFinite(zLon) || !Number.isFinite(radiusM)) {
+        console.warn('telegram-alerts: skipping geofence with bad coords', zone.id, zone.name);
+        continue;
+      }
+      const isInside = haversineKm(lat, lon, zLat, zLon) * 1000 <= radiusM;
 
-        const wasInside = statusRecord?.is_inside || false;
+      const { data: statusRecord } = await supabase
+        .from('device_geofence_status')
+        .select('is_inside')
+        .eq('device_id', device_id)
+        .eq('geofence_id', zone.id)
+        .maybeSingle();
 
-        if (isInside !== wasInside) {
-          const action = isInside ? "ENTERED" : "LEFT";
-          const emoji = isInside ? "🚩" : "✅";
+      const wasInside = statusRecord?.is_inside || false;
+
+      if (isInside !== wasInside) {
+        if (geofenceAlertsOn) {
+          const action = isInside ? 'ENTERED' : 'LEFT';
+          const emoji = isInside ? '🚩' : '✅';
           await sendTelegramBroadcast(
             chatIds,
             `${emoji} *Zone Alert: ${device_id}*\nHas ${action} the zone: *${zone.name}*`,
           );
-          
-          await supabase
-            .from('device_geofence_status')
-            .upsert({
-              user_id: deviceOwner.user_id,
-              device_id: device_id,
-              geofence_id: zone.id,
-              is_inside: isInside,
-              last_status_change: new Date().toISOString()
-            }, { onConflict: 'device_id,geofence_id' });
+        }
+
+        await supabase.from('device_geofence_status').upsert(
+          {
+            user_id: deviceOwner.user_id,
+            device_id: device_id,
+            geofence_id: zone.id,
+            is_inside: isInside,
+            last_status_change: new Date().toISOString(),
+          },
+          { onConflict: 'device_id,geofence_id' },
+        );
+
+        if (zoneName === 'home' && GATE_AUTOMATION_ENABLED && !isInside && wasInside) {
+          await markGateLeftHomePrerequisite(deviceOwner.user_id, device_id);
         }
       }
     }
@@ -321,17 +395,21 @@ async function processGateAutomation(params: {
     .eq('device_id', deviceId)
     .maybeSingle();
 
-  const state: GateStateRow = row ?? {
-    user_id: userId,
-    device_id: deviceId,
-    status: 'HOME',
-    outside_since: null,
-    driving_since: null,
-    inside_streak: 0,
-    last_distance_m: null,
-    last_trigger_at: null,
-    cooldown_until: null,
-  };
+  const state: GateStateRow = row
+    ? rowToGateState(row as Record<string, unknown>)
+    : {
+        user_id: userId,
+        device_id: deviceId,
+        status: 'HOME',
+        outside_since: null,
+        driving_since: null,
+        inside_streak: 0,
+        last_distance_m: null,
+        last_trigger_at: null,
+        cooldown_until: null,
+        seen_left_home_alert: false,
+        seen_geofence_armed_alert: false,
+      };
 
   const inCooldown = !!state.cooldown_until && now < new Date(state.cooldown_until);
   if (inCooldown) {
@@ -344,6 +422,10 @@ async function processGateAutomation(params: {
 
   if (state.status === 'TRIGGERED_COOLDOWN' && !inCooldown) {
     state.status = isInsideInner ? 'HOME' : 'AWAY_PENDING';
+    if (isInsideInner) {
+      state.seen_left_home_alert = false;
+      state.seen_geofence_armed_alert = false;
+    }
   }
 
   if (isOutsideOuter) {
@@ -366,6 +448,7 @@ async function processGateAutomation(params: {
       
       if (outsideSec >= MIN_OUTSIDE_SEC && drivingSec >= MIN_DRIVE_SEC) {
         state.status = 'AWAY_CONFIRMED';
+        state.seen_geofence_armed_alert = true;
         await sendTelegramBroadcast(
           chatIds,
           `🟢 *Geofence Armed*\nDevice: *${deviceId}*\nSystem is locked and ready to trigger the gate upon your return! 🚗`,
@@ -388,35 +471,47 @@ async function processGateAutomation(params: {
   if ((state.status === 'AWAY_CONFIRMED' || state.status === 'RETURNING') && isInsideInner) {
     state.inside_streak += 1;
     if (state.inside_streak >= ENTRY_CONFIRM_POINTS) {
-      // Drive gate from Home Assistant: set DB state only. HA polls `device_gate_state` and pulses the relay.
-      // Do NOT depend on Vercel/eWeLink or Telegram commands here (avoids ewelink-api / spam on failure).
-      triggered = true;
-      state.last_trigger_at = now.toISOString();
-      state.cooldown_until = new Date(now.getTime() + COOLDOWN_SEC * 1000).toISOString();
-      state.status = 'TRIGGERED_COOLDOWN';
-      state.outside_since = null;
-      state.driving_since = null;
+      const prereqOk = state.seen_left_home_alert && state.seen_geofence_armed_alert;
+      if (!prereqOk) {
+        console.warn(
+          `telegram-alerts: gate suppressed (${deviceId}) — need Home zone LEFT + Geofence Armed before ENTER can open gate`,
+        );
+        state.inside_streak = 0;
+      } else {
+        // Drive gate from Home Assistant: set DB state only. HA polls `device_gate_state` and pulses the relay.
+        // Do NOT depend on Vercel/eWeLink or Telegram commands here (avoids ewelink-api / spam on failure).
+        triggered = true;
+        state.seen_left_home_alert = false;
+        state.seen_geofence_armed_alert = false;
+        state.last_trigger_at = now.toISOString();
+        state.cooldown_until = new Date(now.getTime() + COOLDOWN_SEC * 1000).toISOString();
+        state.status = 'TRIGGERED_COOLDOWN';
+        state.outside_since = null;
+        state.driving_since = null;
 
-      const gateCmdSlug = deviceId.toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'device';
-      let pulseLine = '';
-      if (HOME_ASSISTANT_GATE_WEBHOOK_URL && !GATE_EDGE_WEBHOOK_DISABLED) {
-        const pulse = await pulseHomeAssistantGateWebhook(HOME_ASSISTANT_GATE_WEBHOOK_URL);
-        if (pulse.ok) {
-          pulseLine = `\n✅ *HA webhook pulse* (same as \`/trigger_gate_${gateCmdSlug}\`): ok`;
-        } else {
-          pulseLine = `\n⚠️ *HA webhook pulse failed:* ${pulse.detail.replace(/[\n`]/g, ' ')}`;
-          console.error('HOME_ASSISTANT_GATE_WEBHOOK_URL pulse failed', pulse.detail);
+        const gateCmdSlug = deviceId.toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'device';
+        let pulseLine = '';
+        if (HOME_ASSISTANT_GATE_WEBHOOK_URL && !GATE_EDGE_WEBHOOK_DISABLED) {
+          const pulse = await pulseHomeAssistantGateWebhook(HOME_ASSISTANT_GATE_WEBHOOK_URL);
+          if (pulse.ok) {
+            pulseLine = `\n✅ *HA webhook pulse* (same as \`/trigger_gate_${gateCmdSlug}\`): ok`;
+          } else {
+            pulseLine = `\n⚠️ *HA webhook pulse failed:* ${pulse.detail.replace(/[\n`]/g, ' ')}`;
+            console.error('HOME_ASSISTANT_GATE_WEBHOOK_URL pulse failed', pulse.detail);
+          }
         }
-      }
 
-      await sendTelegramBroadcast(
-        chatIds,
-        `🚪 *Gate triggered*\nDevice: *${deviceId}*\nSensor \`TRIGGERED_COOLDOWN\` + optional instant pulse${pulseLine}\nDistance: ${distM.toFixed(0)}m · Speed: ${speedKmh.toFixed(1)} km/h`,
-      );
+        await sendTelegramBroadcast(
+          chatIds,
+          `🚪 *Gate triggered*\nDevice: *${deviceId}*\nSensor \`TRIGGERED_COOLDOWN\` + optional instant pulse${pulseLine}\nDistance: ${distM.toFixed(0)}m · Speed: ${speedKmh.toFixed(1)} km/h`,
+        );
+      }
     }
   } else if (isInsideInner) {
     state.status = 'HOME';
     state.inside_streak = Math.min(state.inside_streak + 1, ENTRY_CONFIRM_POINTS);
+    state.seen_left_home_alert = false;
+    state.seen_geofence_armed_alert = false;
   } else {
     state.inside_streak = 0;
   }
@@ -431,18 +526,13 @@ async function processGateAutomation(params: {
 }
 
 async function saveGateState(state: GateStateRow) {
-  await supabase.from('device_gate_state').upsert({
-    user_id: state.user_id,
-    device_id: state.device_id,
-    status: state.status,
-    outside_since: state.outside_since,
-    driving_since: state.driving_since,
-    inside_streak: state.inside_streak,
-    last_distance_m: state.last_distance_m,
-    last_trigger_at: state.last_trigger_at,
-    cooldown_until: state.cooldown_until,
-    updated_at: new Date().toISOString(),
-  }, { onConflict: 'user_id,device_id' });
+  await supabase.from('device_gate_state').upsert(
+    {
+      ...gateStateToRow(state),
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'user_id,device_id' },
+  );
 }
 
 function elapsedSeconds(iso: string, now: Date): number {

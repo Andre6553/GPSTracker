@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS public.device_gate_state (
   last_distance_m double precision NULL,
   last_trigger_at timestamptz NULL,
   cooldown_until timestamptz NULL,
+  seen_left_home_alert boolean NOT NULL DEFAULT false,
+  seen_geofence_armed_alert boolean NOT NULL DEFAULT false,
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, device_id)
 );
