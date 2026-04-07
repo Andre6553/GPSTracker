@@ -363,6 +363,7 @@ export default function Dashboard() {
   const [geofenceRadius, setGeofenceRadius] = useState(500);
   /** In-progress radius strings per zone id (cleared after save or cancel). */
   const [geofenceRadiusEdits, setGeofenceRadiusEdits] = useState<Record<string, string>>({});
+  const [selectedGeofenceId, setSelectedGeofenceId] = useState("");
   const [geofenceAlerts, setGeofenceAlerts] = useState<{ time: string; device_id: string; zone: string; type: "enter" | "exit" }[]>([]);
   const lastStatesRef = useRef<Record<string, Record<string, boolean>>>({}); // { deviceId: { geofenceId: isInside } }
   /** Skip re-processing the same telemetry row (polling + realtime). */
@@ -1069,6 +1070,10 @@ export default function Dashboard() {
       }
       return touched ? next : prev;
     });
+    setSelectedGeofenceId((prev) => {
+      if (prev && ids.has(prev)) return prev;
+      return geofences[0]?.id ?? "";
+    });
   }, [geofences]);
 
   const handleSaveGeofence = async () => {
@@ -1086,6 +1091,7 @@ export default function Dashboard() {
       alert(`Failed to save zone: ${error.message}`);
     } else if (data) {
       setGeofences(prev => [...prev, data[0] as Geofence]);
+      setSelectedGeofenceId((data[0] as Geofence).id);
       setIsAddingGeofence(false);
       setNewGeofencePos(null);
       setGeofenceName("");
@@ -2257,35 +2263,65 @@ export default function Dashboard() {
                      <button onClick={handleSaveGeofence} className="w-full bg-emerald-600 py-2 rounded-lg text-white font-bold text-xs">Save Zone</button>
                    </div>
                  )}
-                 <div className="flex flex-col gap-2">
-                   {geofences.map(gf => (
-                     <div key={gf.id} className="bg-slate-800/50 border border-slate-700 p-3 rounded-lg flex justify-between items-start gap-3">
-                       <div className="min-w-0 flex-1 space-y-2">
-                         <div className="font-bold text-xs text-white">{gf.name}</div>
-                         <div className="flex items-center gap-2">
-                           <label htmlFor={`gf-r-${gf.id}`} className="text-[9px] text-slate-500 uppercase shrink-0">Radius (m)</label>
-                           <input
-                             id={`gf-r-${gf.id}`}
-                             type="number"
-                             min={GEOFENCE_RADIUS_MIN_M}
-                             max={GEOFENCE_RADIUS_MAX_M}
-                             value={geofenceRadiusEdits[gf.id] ?? String(gf.radius_meters)}
-                             onChange={(e) =>
-                               setGeofenceRadiusEdits((p) => ({ ...p, [gf.id]: e.target.value }))
-                             }
-                             onBlur={() => void commitGeofenceRadius(gf)}
-                             onKeyDown={(e) => {
-                               if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                             }}
-                             className="w-full min-w-0 bg-slate-900 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-white font-mono"
-                           />
-                         </div>
-                         <p className="text-[9px] text-slate-600">Change value and tap outside or press Enter to save.</p>
-                       </div>
-                       <button type="button" onClick={() => handleDeleteGeofence(gf.id)} className="text-slate-500 hover:text-red-400 shrink-0 mt-0.5" aria-label={`Delete zone ${gf.name}`}><X className="w-4 h-4" /></button>
-                     </div>
-                   ))}
-                 </div>
+                {geofences.length === 0 ? (
+                  <p className="text-xs text-slate-500 italic text-center py-6">No zones yet. Tap "Add New Zone" to create your first one.</p>
+                ) : (
+                  <div className="bg-slate-800/50 border border-slate-700 p-3 rounded-lg space-y-3">
+                    <div className="space-y-1">
+                      <label htmlFor="zone-select" className="text-[9px] text-slate-500 uppercase">Zone</label>
+                      <select
+                        id="zone-select"
+                        value={selectedGeofenceId}
+                        onChange={(e) => setSelectedGeofenceId(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-xs text-white"
+                      >
+                        {geofences.map((gf) => (
+                          <option key={gf.id} value={gf.id}>
+                            {gf.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {(() => {
+                      const gf = geofences.find((g) => g.id === selectedGeofenceId) ?? geofences[0];
+                      if (!gf) return null;
+                      return (
+                        <div className="space-y-2">
+                          <div className="font-bold text-xs text-white">{gf.name}</div>
+                          <div className="flex items-center gap-2">
+                            <label htmlFor={`gf-r-${gf.id}`} className="text-[9px] text-slate-500 uppercase shrink-0">Radius (m)</label>
+                            <input
+                              id={`gf-r-${gf.id}`}
+                              type="number"
+                              min={GEOFENCE_RADIUS_MIN_M}
+                              max={GEOFENCE_RADIUS_MAX_M}
+                              value={geofenceRadiusEdits[gf.id] ?? String(gf.radius_meters)}
+                              onChange={(e) =>
+                                setGeofenceRadiusEdits((p) => ({ ...p, [gf.id]: e.target.value }))
+                              }
+                              onBlur={() => void commitGeofenceRadius(gf)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                              }}
+                              className="w-full min-w-0 bg-slate-900 border border-slate-600 rounded-lg px-2 py-1.5 text-xs text-white font-mono"
+                            />
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <p className="text-[9px] text-slate-600">Change value and tap outside or press Enter to save.</p>
+                            <button
+                              type="button"
+                              onClick={() => void handleDeleteGeofence(gf.id)}
+                              className="text-[10px] text-slate-500 hover:text-red-400 underline underline-offset-2"
+                              aria-label={`Delete zone ${gf.name}`}
+                            >
+                              Delete zone
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
               </div>
             )}
 
