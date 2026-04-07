@@ -11,6 +11,7 @@ interface TelemetryPayload {
   lat: number;
   lon: number;
   speed_kmh: number;
+  created_at: string | null;
 }
 
 /** DB webhooks usually send `{ record: row }`; some stacks use `new` or the row at top level. */
@@ -26,12 +27,14 @@ function parseTelemetryRecord(body: unknown): TelemetryPayload | null {
   const lat = Number(row.lat);
   const lon = Number(row.lon);
   const speed_kmh = Number(row.speed_kmh);
+  const created_at = row.created_at != null ? String(row.created_at) : null;
   if (!device_id || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
   return {
     device_id,
     lat,
     lon,
     speed_kmh: Number.isFinite(speed_kmh) ? speed_kmh : 0,
+    created_at,
   };
 }
 
@@ -57,6 +60,7 @@ const OUTER_RADIUS_OFFSET_M = Number(Deno.env.get('OUTER_RADIUS_OFFSET_M') ?? '2
 const MIN_DRIVE_SPEED_KMH = Number(Deno.env.get('MIN_DRIVE_SPEED_KMH') ?? '12');
 const MIN_OUTSIDE_SEC = Number(Deno.env.get('MIN_OUTSIDE_SEC') ?? '300');
 const MIN_DRIVE_SEC = Number(Deno.env.get('MIN_DRIVE_SEC') ?? '30');
+const STALE_TELEMETRY_MAX_AGE_SEC = Number(Deno.env.get('STALE_TELEMETRY_MAX_AGE_SEC') ?? '120');
 /**
  * Inside-inner pings required before auto gate fire. Each increment needs a **telemetry INSERT**
  * that runs this edge function. The DB trigger `skip_telemetry_inside_home_geofence` keeps only
@@ -182,8 +186,20 @@ Deno.serve(async (req: Request) => {
       console.warn('telegram-alerts: bad payload', JSON.stringify(payload).slice(0, 400));
       return new Response('Bad payload: expected device_id, lat, lon', { status: 400 });
     }
-    const { device_id, lat, lon, speed_kmh } = parsed;
+    const { device_id, lat, lon, speed_kmh, created_at } = parsed;
     console.log("telegram-alerts hit", device_id, lat, lon, speed_kmh);
+    if (created_at && Number.isFinite(STALE_TELEMETRY_MAX_AGE_SEC) && STALE_TELEMETRY_MAX_AGE_SEC > 0) {
+      const createdMs = Date.parse(created_at);
+      if (Number.isFinite(createdMs)) {
+        const ageSec = Math.floor((Date.now() - createdMs) / 1000);
+        if (ageSec > STALE_TELEMETRY_MAX_AGE_SEC) {
+          console.log(
+            `telegram-alerts: stale telemetry ignored for alerts/gate (${device_id}) age=${ageSec}s max=${STALE_TELEMETRY_MAX_AGE_SEC}s`,
+          );
+          return new Response('Backfill telemetry: alerts and gate suppressed', { status: 202 });
+        }
+      }
+    }
 
     // 1. Find the owner and their settings (avoid .single() — duplicate device_id breaks alerts)
     const { data: deviceRows, error: deviceRowsErr } = await supabase
