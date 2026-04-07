@@ -82,6 +82,12 @@ const GATE_AUTOMATION_ENABLED = (Deno.env.get('GATE_AUTOMATION_ENABLED') ?? 'tru
 /** Same HA webhook URL as Vercel `HOME_ASSISTANT_GATE_WEBHOOK_URL` (`/trigger_gate_*`). On auto-trigger we POST here immediately (like manual pulse). Set `GATE_EDGE_WEBHOOK_NOTIFY=false` to skip and rely only on HA REST polling `TRIGGERED_COOLDOWN`. */
 const HOME_ASSISTANT_GATE_WEBHOOK_URL = (Deno.env.get('HOME_ASSISTANT_GATE_WEBHOOK_URL') ?? '').trim();
 const GATE_EDGE_WEBHOOK_DISABLED = (Deno.env.get('GATE_EDGE_WEBHOOK_NOTIFY') ?? '').trim().toLowerCase() === 'false';
+const _gateWebhookAttemptsEnv = Number(Deno.env.get('GATE_WEBHOOK_ATTEMPTS') ?? '2');
+const GATE_WEBHOOK_ATTEMPTS =
+  Number.isFinite(_gateWebhookAttemptsEnv) && _gateWebhookAttemptsEnv >= 1 ? Math.floor(_gateWebhookAttemptsEnv) : 2;
+const _gateWebhookRetryMsEnv = Number(Deno.env.get('GATE_WEBHOOK_RETRY_DELAY_MS') ?? '2500');
+const GATE_WEBHOOK_RETRY_DELAY_MS =
+  Number.isFinite(_gateWebhookRetryMsEnv) && _gateWebhookRetryMsEnv >= 0 ? Math.floor(_gateWebhookRetryMsEnv) : 2500;
 
 /** All chats for alerts: `user_telegram_chats` rows plus legacy `user_settings.telegram_chat_id` (deduped). */
 async function resolveTelegramChatIds(userId: string, legacyChatId: unknown): Promise<string[]> {
@@ -364,6 +370,10 @@ async function sendTelegram(chatId: string, text: string) {
   });
 }
 
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** Plain POST — matches Vercel `executeGatePulseFlexible` → HA webhook. */
 async function pulseHomeAssistantGateWebhook(url: string): Promise<{ ok: boolean; detail: string }> {
   const ctrl = new AbortController();
@@ -383,6 +393,31 @@ async function pulseHomeAssistantGateWebhook(url: string): Promise<{ ok: boolean
   } finally {
     clearTimeout(t);
   }
+}
+
+/** Retries on non-2xx / network error only (cannot see Sonoff/eWeLink result from here). */
+async function pulseHomeAssistantGateWebhookWithRetries(url: string): Promise<{
+  ok: boolean;
+  detail: string;
+  attemptsUsed: number;
+}> {
+  let lastDetail = '';
+  for (let attempt = 1; attempt <= GATE_WEBHOOK_ATTEMPTS; attempt++) {
+    const r = await pulseHomeAssistantGateWebhook(url);
+    if (r.ok) {
+      return {
+        ok: true,
+        detail: attempt > 1 ? `${r.detail} (attempt ${attempt}/${GATE_WEBHOOK_ATTEMPTS})` : r.detail,
+        attemptsUsed: attempt,
+      };
+    }
+    lastDetail = r.detail;
+    console.warn(`HOME_ASSISTANT_GATE_WEBHOOK_URL attempt ${attempt}/${GATE_WEBHOOK_ATTEMPTS} failed`, r.detail);
+    if (attempt < GATE_WEBHOOK_ATTEMPTS && GATE_WEBHOOK_RETRY_DELAY_MS > 0) {
+      await sleepMs(GATE_WEBHOOK_RETRY_DELAY_MS);
+    }
+  }
+  return { ok: false, detail: lastDetail, attemptsUsed: GATE_WEBHOOK_ATTEMPTS };
 }
 
 async function processGateAutomation(params: {
@@ -508,12 +543,16 @@ async function processGateAutomation(params: {
         const gateCmdSlug = deviceId.toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'device';
         let pulseLine = '';
         if (HOME_ASSISTANT_GATE_WEBHOOK_URL && !GATE_EDGE_WEBHOOK_DISABLED) {
-          const pulse = await pulseHomeAssistantGateWebhook(HOME_ASSISTANT_GATE_WEBHOOK_URL);
+          const pulse = await pulseHomeAssistantGateWebhookWithRetries(HOME_ASSISTANT_GATE_WEBHOOK_URL);
           if (pulse.ok) {
             pulseLine = `\n✅ *HA webhook pulse* (same as \`/trigger_gate_${gateCmdSlug}\`): ok`;
+            if (pulse.attemptsUsed > 1) {
+              pulseLine += ` *(${pulse.attemptsUsed} tries)*`;
+            }
           } else {
-            pulseLine = `\n⚠️ *HA webhook pulse failed:* ${pulse.detail.replace(/[\n`]/g, ' ')}`;
-            console.error('HOME_ASSISTANT_GATE_WEBHOOK_URL pulse failed', pulse.detail);
+            pulseLine =
+              `\n⚠️ *HA webhook pulse failed* (${pulse.attemptsUsed} tries): ${pulse.detail.replace(/[\n`]/g, ' ')}`;
+            console.error('HOME_ASSISTANT_GATE_WEBHOOK_URL pulse failed after retries', pulse.detail);
           }
         }
 
