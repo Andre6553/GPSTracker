@@ -324,6 +324,8 @@ export default function Dashboard() {
   // Date Filter
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [startTime, setStartTime] = useState("");
+  const [endTime, setEndTime] = useState("");
   const [selectedHistory, setSelectedHistory] = useState<TelemetryPoint[]>([]);
   const [historySyncNonce, setHistorySyncNonce] = useState(0);
   const historyBackfillResyncRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -906,7 +908,7 @@ export default function Dashboard() {
           });
           
           // Do not merge live points into a date-filtered history view (would skew trail / order)
-          if (newData.device_id === selectedDeviceId && !startDate && !endDate) {
+          if (newData.device_id === selectedDeviceId && !startDate && !endDate && !startTime && !endTime) {
             setSelectedHistory(prev => {
               const last = prev[prev.length - 1];
               // 1. Skip if it's stationary jitter
@@ -951,7 +953,7 @@ export default function Dashboard() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [authChecked, fleetDeviceIds, selectedDeviceId, startDate, endDate, refetchFleetLatest, applyGeofenceForTelemetryPoint]);
+  }, [authChecked, fleetDeviceIds, selectedDeviceId, startDate, endDate, startTime, endTime, refetchFleetLatest, applyGeofenceForTelemetryPoint]);
 
   // Lazy-load history for selected device (paginate: PostgREST often caps ~1000 rows per request)
   useEffect(() => {
@@ -972,6 +974,17 @@ export default function Dashboard() {
       const effectiveStartDate = useTodayDefaultWindow ? todayYmd : startDate;
       const effectiveEndDate = useTodayDefaultWindow ? todayYmd : endDate;
       const hasRange = !!(effectiveStartDate || effectiveEndDate);
+      const buildDateTimeBound = (date: string, time: string, isEnd: boolean) => {
+        if (!date) return "";
+        const hhmm = time || (isEnd ? "23:59" : "00:00");
+        const [hRaw, mRaw] = hhmm.split(":");
+        const hh = String(Math.max(0, Math.min(23, Number(hRaw) || 0))).padStart(2, "0");
+        const mm = String(Math.max(0, Math.min(59, Number(mRaw) || 0))).padStart(2, "0");
+        const ss = isEnd ? "59" : "00";
+        return `${date}T${hh}:${mm}:${ss}+02:00`;
+      };
+      const effectiveStartAt = buildDateTimeBound(effectiveStartDate, startTime, false);
+      const effectiveEndAt = buildDateTimeBound(effectiveEndDate, endTime, true);
       const all: TelemetryPoint[] = [];
 
       for (let offset = 0; offset < maxRows; offset += pageSize) {
@@ -984,8 +997,8 @@ export default function Dashboard() {
           .order("created_at", { ascending: hasRange })
           .range(offset, offset + pageSize - 1);
 
-        if (effectiveStartDate) q = q.gte("created_at", `${effectiveStartDate}T00:00:00+02:00`);
-        if (effectiveEndDate) q = q.lte("created_at", `${effectiveEndDate}T23:59:59+02:00`);
+        if (effectiveStartAt) q = q.gte("created_at", effectiveStartAt);
+        if (effectiveEndAt) q = q.lte("created_at", effectiveEndAt);
 
         const { data, error } = await q;
         if (error) {
@@ -1015,7 +1028,7 @@ export default function Dashboard() {
       console.log(
         `FETCHED HISTORY: ${sorted.length} records for ${selectedDeviceId} (${
           hasRange
-            ? `${effectiveStartDate || "…"} → ${effectiveEndDate || "…"}${useTodayDefaultWindow ? " (default: today)" : ""}`
+            ? `${effectiveStartDate || "…"} ${startTime || "00:00"} → ${effectiveEndDate || "…"} ${endTime || "23:59"}${useTodayDefaultWindow ? " (default: today)" : ""}`
             : "recent"
         })`
       );
@@ -1027,7 +1040,7 @@ export default function Dashboard() {
     return () => {
       cancelled = true;
     };
-  }, [selectedDeviceId, startDate, endDate, activeTab, historySyncNonce]);
+  }, [selectedDeviceId, startDate, endDate, startTime, endTime, activeTab, historySyncNonce]);
 
   // Load Geofences
   useEffect(() => {
@@ -2107,14 +2120,34 @@ export default function Dashboard() {
                     <Filter className="w-3.5 h-3.5 text-blue-400" /> Date Range
                   </h2>
                   <div className="flex flex-col gap-2">
-                    <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white" />
-                    <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white" />
+                    <div className="grid grid-cols-2 gap-2">
+                      <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white" />
+                      <input
+                        type="time"
+                        value={startTime}
+                        onChange={e => setStartTime(e.target.value)}
+                        disabled={!startDate}
+                        className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white disabled:opacity-50"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white" />
+                      <input
+                        type="time"
+                        value={endTime}
+                        onChange={e => setEndTime(e.target.value)}
+                        disabled={!endDate}
+                        className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white disabled:opacity-50"
+                      />
+                    </div>
                     <button
                       type="button"
                       onClick={() => {
                         const d = format(new Date(), "yyyy-MM-dd");
                         setStartDate(d);
                         setEndDate(d);
+                        setStartTime("");
+                        setEndTime("");
                       }}
                       className="mt-1 w-full flex items-center justify-center gap-1.5 rounded-lg border border-blue-600/50 bg-blue-600/20 px-2 py-2 text-[11px] font-semibold text-blue-300 hover:bg-blue-600/30 transition-colors"
                     >
@@ -2122,7 +2155,7 @@ export default function Dashboard() {
                       Today (full day)
                     </button>
                     <p className="text-[10px] text-slate-500 leading-snug">
-                      Uses your PC&apos;s date for start and end, loads all points for that day in batches (map zooms to full trail).
+                      Optional times narrow the selected dates. If a time is blank, full-day bounds are used for that side of the range.
                     </p>
                     {isLoadingHistory ? (
                       <p className="text-[10px] text-amber-400/90">Loading history…</p>
