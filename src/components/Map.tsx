@@ -39,6 +39,12 @@ export interface MapProps {
   isDarkMode?: boolean;
   /** When true, do not auto fitBounds to full history on each update (e.g. live Go navigation + manual zoom). */
   suppressHistoryFitBounds?: boolean;
+  /**
+   * When `geofenceFlyNonce` increments and `geofenceFlyTargetId` matches a zone, the map fits that circle.
+   * Nonce 0 skips (avoids flying on initial `selectedGeofenceId` sync).
+   */
+  geofenceFlyNonce?: number;
+  geofenceFlyTargetId?: string | null;
 }
 
 // Must match after every style reload (theme toggle); otherwise trail reverts to solid color or breaks.
@@ -283,6 +289,8 @@ export default function Map({
   isAddingGeofence,
   isDarkMode = true,
   suppressHistoryFitBounds = false,
+  geofenceFlyNonce = 0,
+  geofenceFlyTargetId = null,
 }: MapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
@@ -298,6 +306,8 @@ export default function Map({
   const [followSelectedVehicle, setFollowSelectedVehicle] = useState(false);
 
   selectedHistoryRef.current = selectedHistory;
+  const geofencesRef = useRef(geofences);
+  geofencesRef.current = geofences;
 
   const defaultCenter: [number, number] = [22.0, -34.0]; // [lng, lat]
 
@@ -1388,6 +1398,27 @@ export default function Map({
       if (map.getLayer("geofences-border")) map.moveLayer("geofences-border"); // Border on top of path
     } else s.setData({ type: "FeatureCollection", features: [] });
   }, [geofences, mapLoaded]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapLoaded || geofenceFlyNonce === 0 || !geofenceFlyTargetId) return;
+    const gf = geofencesRef.current.find((g) => g.id === geofenceFlyTargetId);
+    if (!gf) return;
+    const lat = Number(gf.lat);
+    const lon = Number(gf.lon);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+    const r = Math.max(50, Number(gf.radius_meters) || 500);
+    const latDelta = r / 111_320;
+    const cosLat = Math.cos((lat * Math.PI) / 180);
+    const lonDelta = Math.abs(cosLat) > 1e-6 ? r / (111_320 * cosLat) : latDelta;
+    map.fitBounds(
+      [
+        [lon - lonDelta, lat - latDelta],
+        [lon + lonDelta, lat + latDelta],
+      ],
+      { padding: 56, maxZoom: 16, duration: 850 }
+    );
+  }, [geofenceFlyNonce, geofenceFlyTargetId, mapLoaded]);
 
   const flyToCar = useCallback(() => {
     const selected = fleetLatest.find((c) => c.device_id === selectedDeviceId);

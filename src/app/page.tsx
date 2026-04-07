@@ -364,6 +364,8 @@ export default function Dashboard() {
   /** In-progress radius strings per zone id (cleared after save or cancel). */
   const [geofenceRadiusEdits, setGeofenceRadiusEdits] = useState<Record<string, string>>({});
   const [selectedGeofenceId, setSelectedGeofenceId] = useState("");
+  /** Bumped when the user picks a zone (or saves a new one) so the map flies without zooming on initial sync. */
+  const [geofenceMapFlyNonce, setGeofenceMapFlyNonce] = useState(0);
   const [geofenceAlerts, setGeofenceAlerts] = useState<{ time: string; device_id: string; zone: string; type: "enter" | "exit" }[]>([]);
   const lastStatesRef = useRef<Record<string, Record<string, boolean>>>({}); // { deviceId: { geofenceId: isInside } }
   /** Skip re-processing the same telemetry row (polling + realtime). */
@@ -1092,6 +1094,7 @@ export default function Dashboard() {
     } else if (data) {
       setGeofences(prev => [...prev, data[0] as Geofence]);
       setSelectedGeofenceId((data[0] as Geofence).id);
+      setGeofenceMapFlyNonce((n) => n + 1);
       setIsAddingGeofence(false);
       setNewGeofencePos(null);
       setGeofenceName("");
@@ -2272,7 +2275,10 @@ export default function Dashboard() {
                       <select
                         id="zone-select"
                         value={selectedGeofenceId}
-                        onChange={(e) => setSelectedGeofenceId(e.target.value)}
+                        onChange={(e) => {
+                          setSelectedGeofenceId(e.target.value);
+                          setGeofenceMapFlyNonce((n) => n + 1);
+                        }}
                         className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-xs text-white"
                       >
                         {geofences.map((gf) => (
@@ -2796,6 +2802,8 @@ export default function Dashboard() {
           isAddingGeofence={isAddingGeofence}
           isDarkMode={isDarkMode}
           suppressHistoryFitBounds={isGoNavigationActive}
+          geofenceFlyNonce={geofenceMapFlyNonce}
+          geofenceFlyTargetId={selectedGeofenceId || null}
         />
       </div>
 
