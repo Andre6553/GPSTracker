@@ -1,4 +1,4 @@
-//ver2.1 4/8/2026 11:22
+//ver2.2 4/8/2026 12:03
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -12,6 +12,8 @@
 #include <Wire.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
+#include <Preferences.h>
+#include <WebServer.h>
 
 // =============================================================
 // ESP32 CAR TRACKER - STABILITY OPTIMIZED
@@ -45,6 +47,7 @@ unsigned long lastWifiReconnectAttempt = 0;
 unsigned long lastWifiPriorityCheck = 0;
 bool showWifiInfoPanel = false;
 bool otaReady = false;
+int failedReconnectCycles = 0;
 // GPS / cloud / LittleFS log cadence (smoother trails vs storage & bandwidth)
 const unsigned long PUBLISH_INTERVAL = 5000;
 const unsigned long SYNC_INTERVAL = 15000;
@@ -56,6 +59,13 @@ const unsigned long WIFI_CONNECT_ATTEMPT_MS = 10000;
 const unsigned long WIFI_RECONNECT_INTERVAL_MS = 15000;
 const unsigned long WIFI_PRIORITY_RECHECK_MS = 20000;
 const unsigned long WIFI_CLOUD_CHECK_TIMEOUT_MS = 3000;
+const int MAX_CUSTOM_NETWORKS = 3;
+
+Preferences wifiPrefs;
+WebServer configServer(80);
+String customSsids[MAX_CUSTOM_NETWORKS];
+String customPasses[MAX_CUSTOM_NETWORKS];
+bool configPortalShouldExit = false;
 
 void MQTT_connect();
 void processOfflineSync();
@@ -67,6 +77,10 @@ int getScanRssiBySsid(const char* ssid, int scanCount);
 void initOta();
 bool isCurrentHotspotConnection();
 bool hasCloudReachability();
+void loadCustomNetworks();
+bool saveCustomNetwork(const String& ssid, const String& pass);
+bool connectBestCustomNetwork(int scanCount, unsigned long timeoutPerNetworkMs);
+void startConfigPortal();
 
 bool connectToSsid(const char* ssid, const char* pass, unsigned long timeoutMs) {
   if (!ssid || !ssid[0]) return false;
@@ -91,6 +105,23 @@ bool connectToSsid(const char* ssid, const char* pass, unsigned long timeoutMs) 
     return true;
   }
   Serial.println("\n[WiFi] Failed");
+  return false;
+}
+
+bool connectBestCustomNetwork(int scanCount, unsigned long timeoutPerNetworkMs) {
+  int bestSlot = -1;
+  int bestRssi = -1000;
+  for (int i = 0; i < MAX_CUSTOM_NETWORKS; i++) {
+    if (customSsids[i].length() == 0) continue;
+    const int rssi = (scanCount > 0) ? getScanRssiBySsid(customSsids[i].c_str(), scanCount) : -1000;
+    if (rssi > bestRssi) {
+      bestRssi = rssi;
+      bestSlot = i;
+    }
+  }
+  if (bestSlot >= 0 && bestRssi > -1000) {
+    return connectToSsid(customSsids[bestSlot].c_str(), customPasses[bestSlot].c_str(), timeoutPerNetworkMs);
+  }
   return false;
 }
 
@@ -173,6 +204,8 @@ bool connectWifiWithPriority(unsigned long timeoutPerNetworkMs) {
     return connectToSsid(bestHomeSsid, bestHomePass, timeoutPerNetworkMs);
   }
 
+  if (connectBestCustomNetwork(n, timeoutPerNetworkMs)) return true;
+
   // If none are seen in scan, fallback to sequential attempts.
   Serial.println("[WiFi] Known SSIDs not seen in scan. Trying configured list...");
   if (connectToSsid(WIFI_SPOT_SSID, WIFI_SPOT_PASS, timeoutPerNetworkMs)) return true;
@@ -182,6 +215,10 @@ bool connectWifiWithPriority(unsigned long timeoutPerNetworkMs) {
   #ifdef WIFI_HOME3_SSID
   if (connectToSsid(WIFI_HOME3_SSID, WIFI_HOME3_PASS, timeoutPerNetworkMs)) return true;
   #endif
+  for (int i = 0; i < MAX_CUSTOM_NETWORKS; i++) {
+    if (customSsids[i].length() == 0) continue;
+    if (connectToSsid(customSsids[i].c_str(), customPasses[i].c_str(), timeoutPerNetworkMs)) return true;
+  }
   return false;
 }
 
@@ -210,11 +247,94 @@ bool isCurrentHotspotConnection() {
   return current == String(WIFI_SPOT_SSID) || current == String(WIFE_SPOT_SSID);
 }
 
+void loadCustomNetworks() {
+  wifiPrefs.begin("wifi", true);
+  for (int i = 0; i < MAX_CUSTOM_NETWORKS; i++) {
+    const String ssidKey = "ssid" + String(i);
+    const String passKey = "pass" + String(i);
+    customSsids[i] = wifiPrefs.getString(ssidKey.c_str(), "");
+    customPasses[i] = wifiPrefs.getString(passKey.c_str(), "");
+  }
+  wifiPrefs.end();
+}
+
+bool saveCustomNetwork(const String& ssid, const String& pass) {
+  if (ssid.length() == 0) return false;
+  int slot = -1;
+  for (int i = 0; i < MAX_CUSTOM_NETWORKS; i++) {
+    if (customSsids[i] == ssid) {
+      slot = i;
+      break;
+    }
+    if (slot < 0 && customSsids[i].length() == 0) slot = i;
+  }
+  if (slot < 0) slot = 0; // overwrite oldest slot when full
+
+  customSsids[slot] = ssid;
+  customPasses[slot] = pass;
+  wifiPrefs.begin("wifi", false);
+  const String ssidKey = "ssid" + String(slot);
+  const String passKey = "pass" + String(slot);
+  wifiPrefs.putString(ssidKey.c_str(), ssid);
+  wifiPrefs.putString(passKey.c_str(), pass);
+  wifiPrefs.end();
+  return true;
+}
+
+void startConfigPortal() {
+  const String apSsid = String(DEVICE_ID) + "-Setup";
+  const char* apPass = "setup1234";
+  configPortalShouldExit = false;
+
+  WiFi.disconnect(true, true);
+  delay(100);
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(apSsid.c_str(), apPass);
+  Serial.printf("[CFG] AP mode: %s  IP=%s\n", apSsid.c_str(), WiFi.softAPIP().toString().c_str());
+
+  configServer.on("/", HTTP_GET, []() {
+    String html =
+      "<!doctype html><html><body><h2>ESP32 WiFi Setup</h2>"
+      "<p>AP is active because normal WiFi failed.</p>"
+      "<form method='POST' action='/save'>"
+      "SSID:<br><input name='ssid' maxlength='64'><br>"
+      "Password:<br><input name='pass' type='password' maxlength='64'><br><br>"
+      "<button type='submit'>Save & Connect</button>"
+      "</form></body></html>";
+    configServer.send(200, "text/html", html);
+  });
+
+  configServer.on("/save", HTTP_POST, []() {
+    const String ssid = configServer.arg("ssid");
+    const String pass = configServer.arg("pass");
+    if (saveCustomNetwork(ssid, pass)) {
+      configServer.send(200, "text/html", "<h3>Saved. Device is reconnecting...</h3>");
+      configPortalShouldExit = true;
+    } else {
+      configServer.send(400, "text/html", "<h3>Invalid SSID.</h3>");
+    }
+  });
+
+  configServer.begin();
+  const unsigned long start = millis();
+  while (!configPortalShouldExit && (millis() - start < 300000UL)) {
+    configServer.handleClient();
+    delay(10);
+    yield();
+  }
+  configServer.stop();
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_STA);
+  delay(200);
+  loadCustomNetworks();
+}
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
   Serial.printf("\n\n--- BOOTING DEVICE: %s ---\n", DEVICE_ID);
   WiFi.setSleep(false);
+  loadCustomNetworks();
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println(F("OLED Failed"));
@@ -233,7 +353,12 @@ void setup() {
   display.display();
 
   Serial.println("Connecting WiFi...");
-  const bool wifiOk = connectWifiWithPriority(WIFI_CONNECT_ATTEMPT_MS);
+  bool wifiOk = connectWifiWithPriority(WIFI_CONNECT_ATTEMPT_MS);
+  if (!wifiOk) {
+    Serial.println("[CFG] No usable WiFi. Starting setup AP...");
+    startConfigPortal();
+    wifiOk = connectWifiWithPriority(WIFI_CONNECT_ATTEMPT_MS);
+  }
   if (wifiOk) {
     Serial.println("\nWiFi OK!");
   } else {
@@ -266,10 +391,21 @@ void loop() {
     lastWifiReconnectAttempt = millis();
     Serial.println("[WiFi] Reconnect cycle...");
     otaReady = false;
-    (void)connectWifiWithPriority(WIFI_CONNECT_ATTEMPT_MS);
+    const bool reconnected = connectWifiWithPriority(WIFI_CONNECT_ATTEMPT_MS);
+    if (!reconnected) {
+      failedReconnectCycles++;
+      if (failedReconnectCycles >= 4) {
+        Serial.println("[CFG] Extended offline. Starting setup AP...");
+        startConfigPortal();
+        failedReconnectCycles = 0;
+      }
+    } else {
+      failedReconnectCycles = 0;
+    }
   }
 
   if (WiFi.status() == WL_CONNECTED) {
+    failedReconnectCycles = 0;
     if (millis() - lastWifiPriorityCheck >= WIFI_PRIORITY_RECHECK_MS) {
       lastWifiPriorityCheck = millis();
       // If we're on home Wi-Fi and a hotspot appears, switch immediately without reboot.
