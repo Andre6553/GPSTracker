@@ -1,4 +1,4 @@
-//ver1.7 4/8/2026 09:17
+//ver1.8 4/8/2026 10:12
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -312,8 +312,15 @@ void renderDashboardOLED() {
     if (wifiUp) {
       String ssid = WiFi.SSID();
       if (ssid.length() == 0) ssid = F("(hidden)");
-      if (ssid.length() > 13) ssid = ssid.substring(0, 13);
-      display.print(ssid);
+      const int firstLineChars = 15;
+      if (ssid.length() <= firstLineChars) {
+        display.print(ssid);
+      } else {
+        display.print(ssid.substring(0, firstLineChars));
+        yInfo += 8;
+        display.setCursor(0, yInfo);
+        display.print(ssid.substring(firstLineChars));
+      }
     } else {
       display.print(F("-"));
     }
