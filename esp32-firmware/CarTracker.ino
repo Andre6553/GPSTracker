@@ -1,4 +1,4 @@
-//ver1.6 4/8/2026 09:15
+//ver1.7 4/8/2026 09:17
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -59,6 +59,7 @@ bool pushToSupabase(double lat, double lon, double speed, double alt, int sats, 
 void renderDashboardOLED();
 bool connectToSsid(const char* ssid, const char* pass, unsigned long timeoutMs);
 bool connectWifiWithPriority(unsigned long timeoutPerNetworkMs);
+int getScanRssiBySsid(const char* ssid, int scanCount);
 
 bool connectToSsid(const char* ssid, const char* pass, unsigned long timeoutMs) {
   if (!ssid || !ssid[0]) return false;
@@ -80,8 +81,69 @@ bool connectToSsid(const char* ssid, const char* pass, unsigned long timeoutMs) 
   return false;
 }
 
+int getScanRssiBySsid(const char* ssid, int scanCount) {
+  if (!ssid || !ssid[0] || scanCount <= 0) return -1000;
+  int best = -1000;
+  for (int i = 0; i < scanCount; i++) {
+    if (WiFi.SSID(i) == String(ssid)) {
+      const int rssi = WiFi.RSSI(i);
+      if (rssi > best) best = rssi;
+    }
+  }
+  return best;
+}
+
 bool connectWifiWithPriority(unsigned long timeoutPerNetworkMs) {
-  // Priority order: hotspots first, then home Wi-Fi.
+  // Rule: if hotspot is available, always use hotspot; otherwise pick strongest home Wi-Fi.
+  Serial.println("[WiFi] Scanning nearby networks...");
+  const int n = WiFi.scanNetworks(false, true);
+  const bool haveScan = n > 0;
+
+  const int rssiSpot1 = haveScan ? getScanRssiBySsid(WIFI_SPOT_SSID, n) : -1000;
+  const int rssiSpot2 = haveScan ? getScanRssiBySsid(WIFE_SPOT_SSID, n) : -1000;
+  if (rssiSpot1 > -1000 || rssiSpot2 > -1000) {
+    const bool useSpot1 = (rssiSpot1 >= rssiSpot2);
+    const char* spotSsid = useSpot1 ? WIFI_SPOT_SSID : WIFE_SPOT_SSID;
+    const char* spotPass = useSpot1 ? WIFI_SPOT_PASS : WIFE_SPOT_PASS;
+    Serial.printf("[WiFi] Hotspot detected. Picking strongest hotspot (%s, %d dBm)\n",
+                  spotSsid, useSpot1 ? rssiSpot1 : rssiSpot2);
+    WiFi.scanDelete();
+    return connectToSsid(spotSsid, spotPass, timeoutPerNetworkMs);
+  }
+
+  const char* bestHomeSsid = nullptr;
+  const char* bestHomePass = nullptr;
+  int bestHomeRssi = -1000;
+  const int rssiHome1 = haveScan ? getScanRssiBySsid(WIFI_HOME_SSID, n) : -1000;
+  const int rssiHome2 = haveScan ? getScanRssiBySsid(WIFI_HOME2_SSID, n) : -1000;
+  if (rssiHome1 > bestHomeRssi) {
+    bestHomeRssi = rssiHome1;
+    bestHomeSsid = WIFI_HOME_SSID;
+    bestHomePass = WIFI_HOME_PASS;
+  }
+  if (rssiHome2 > bestHomeRssi) {
+    bestHomeRssi = rssiHome2;
+    bestHomeSsid = WIFI_HOME2_SSID;
+    bestHomePass = WIFI_HOME2_PASS;
+  }
+  #ifdef WIFI_HOME3_SSID
+  const int rssiHome3 = haveScan ? getScanRssiBySsid(WIFI_HOME3_SSID, n) : -1000;
+  if (rssiHome3 > bestHomeRssi) {
+    bestHomeRssi = rssiHome3;
+    bestHomeSsid = WIFI_HOME3_SSID;
+    bestHomePass = WIFI_HOME3_PASS;
+  }
+  #endif
+  WiFi.scanDelete();
+
+  if (bestHomeSsid) {
+    Serial.printf("[WiFi] No hotspot found. Picking strongest home Wi-Fi (%s, %d dBm)\n",
+                  bestHomeSsid, bestHomeRssi);
+    return connectToSsid(bestHomeSsid, bestHomePass, timeoutPerNetworkMs);
+  }
+
+  // If none are seen in scan, fallback to sequential attempts.
+  Serial.println("[WiFi] Known SSIDs not seen in scan. Trying configured list...");
   if (connectToSsid(WIFI_SPOT_SSID, WIFI_SPOT_PASS, timeoutPerNetworkMs)) return true;
   if (connectToSsid(WIFE_SPOT_SSID, WIFE_SPOT_PASS, timeoutPerNetworkMs)) return true;
   if (connectToSsid(WIFI_HOME_SSID, WIFI_HOME_PASS, timeoutPerNetworkMs)) return true;
