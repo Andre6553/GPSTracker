@@ -1,4 +1,4 @@
-//ver2.0 4/8/2026 10:56
+//ver2.1 4/8/2026 11:22
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -55,6 +55,7 @@ const unsigned long MAX_FIX_AGE_MS = 45000;
 const unsigned long WIFI_CONNECT_ATTEMPT_MS = 10000;
 const unsigned long WIFI_RECONNECT_INTERVAL_MS = 15000;
 const unsigned long WIFI_PRIORITY_RECHECK_MS = 20000;
+const unsigned long WIFI_CLOUD_CHECK_TIMEOUT_MS = 3000;
 
 void MQTT_connect();
 void processOfflineSync();
@@ -65,6 +66,7 @@ bool connectWifiWithPriority(unsigned long timeoutPerNetworkMs);
 int getScanRssiBySsid(const char* ssid, int scanCount);
 void initOta();
 bool isCurrentHotspotConnection();
+bool hasCloudReachability();
 
 bool connectToSsid(const char* ssid, const char* pass, unsigned long timeoutMs) {
   if (!ssid || !ssid[0]) return false;
@@ -80,10 +82,34 @@ bool connectToSsid(const char* ssid, const char* pass, unsigned long timeoutMs) 
   }
   if (WiFi.status() == WL_CONNECTED) {
     Serial.printf("\n[WiFi] Connected: %s RSSI=%ld\n", WiFi.SSID().c_str(), WiFi.RSSI());
+    if (!hasCloudReachability()) {
+      Serial.println("[WiFi] Connected SSID has no cloud reachability. Trying next network...");
+      WiFi.disconnect(true, true);
+      delay(100);
+      return false;
+    }
     return true;
   }
   Serial.println("\n[WiFi] Failed");
   return false;
+}
+
+bool hasCloudReachability() {
+  if (WiFi.status() != WL_CONNECTED) return false;
+  WiFiClientSecure secureClient;
+  secureClient.setInsecure();
+  secureClient.setTimeout(WIFI_CLOUD_CHECK_TIMEOUT_MS / 1000);
+
+  HTTPClient http;
+  const String url = String(SUPABASE_URL) + "/rest/v1/";
+  if (!http.begin(secureClient, url)) return false;
+  http.setTimeout((int)WIFI_CLOUD_CHECK_TIMEOUT_MS);
+  http.addHeader("apikey", SUPABASE_ANON_KEY);
+  http.addHeader("Authorization", "Bearer " + String(SUPABASE_ANON_KEY));
+  const int code = http.GET();
+  http.end();
+  // 2xx means reachable and accepted. 401/404 also prove internet path to Supabase.
+  return (code >= 200 && code < 500);
 }
 
 int getScanRssiBySsid(const char* ssid, int scanCount) {
