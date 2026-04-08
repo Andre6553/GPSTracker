@@ -210,7 +210,7 @@ Deno.serve(async (req: Request) => {
     // 1. Find the owner and their settings (avoid .single() — duplicate device_id breaks alerts)
     const { data: deviceRows, error: deviceRowsErr } = await supabase
       .from('user_devices')
-      .select('user_id, speed_limit, last_speed_alert_sent')
+      .select('user_id, speed_limit, last_speed_alert_sent, offline_alert_sent')
       .eq('device_id', device_id);
     if (deviceRowsErr || !deviceRows?.length) {
       return new Response('Device not claimed', { status: 404 });
@@ -250,6 +250,20 @@ Deno.serve(async (req: Request) => {
 
     const chatIds = await resolveTelegramChatIds(deviceOwner.user_id, userSettings.telegram_chat_id);
     if (chatIds.length === 0) return new Response('No Telegram link (add user_telegram_chats or telegram_chat_id)');
+
+    // 1.5 PRESENCE: always refresh last_seen; if previously marked offline, emit one recovery alert and reset latch.
+    const nowIso = new Date().toISOString();
+    if (deviceOwner.offline_alert_sent === true) {
+      await sendTelegramBroadcast(
+        chatIds,
+        `🟢 *Device Online*\nDevice: *${device_id}*\nTelemetry resumed.`,
+      );
+    }
+    await supabase
+      .from('user_devices')
+      .update({ last_seen_at: nowIso, offline_alert_sent: false })
+      .eq('user_id', deviceOwner.user_id)
+      .eq('device_id', device_id);
 
     // Match dashboard semantics (src/app/page.tsx): NULL / missing => alerts ON; only explicit false disables.
     const speedAlertsOn = userSettings.speed_alerts_enabled !== false;
