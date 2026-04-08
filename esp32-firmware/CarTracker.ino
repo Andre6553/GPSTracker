@@ -1,4 +1,4 @@
-//ver1.8 4/8/2026 10:12
+//ver1.9 4/8/2026 10:20
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -43,6 +43,7 @@ unsigned long lastDisplayUpdate = 0;
 unsigned long lastSyncCheck = 0;
 unsigned long lastWifiReconnectAttempt = 0;
 bool showWifiInfoPanel = false;
+bool otaReady = false;
 // GPS / cloud / LittleFS log cadence (smoother trails vs storage & bandwidth)
 const unsigned long PUBLISH_INTERVAL = 5000;
 const unsigned long SYNC_INTERVAL = 15000;
@@ -60,6 +61,7 @@ void renderDashboardOLED();
 bool connectToSsid(const char* ssid, const char* pass, unsigned long timeoutMs);
 bool connectWifiWithPriority(unsigned long timeoutPerNetworkMs);
 int getScanRssiBySsid(const char* ssid, int scanCount);
+void initOta();
 
 bool connectToSsid(const char* ssid, const char* pass, unsigned long timeoutMs) {
   if (!ssid || !ssid[0]) return false;
@@ -154,10 +156,31 @@ bool connectWifiWithPriority(unsigned long timeoutPerNetworkMs) {
   return false;
 }
 
+void initOta() {
+  ArduinoOTA.setHostname(DEVICE_ID);
+  ArduinoOTA.setPort(3232);
+  ArduinoOTA.onStart([]() {
+    Serial.println("[OTA] Start");
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\n[OTA] End");
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("[OTA] Progress: %u%%\r", (progress * 100U) / total);
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("[OTA] Error[%u]\n", error);
+  });
+  ArduinoOTA.begin();
+  otaReady = true;
+  Serial.printf("[OTA] Ready: %s.local:%d\n", DEVICE_ID, 3232);
+}
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
   Serial.printf("\n\n--- BOOTING DEVICE: %s ---\n", DEVICE_ID);
+  WiFi.setSleep(false);
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println(F("OLED Failed"));
@@ -198,20 +221,22 @@ void setup() {
   neopixelWrite(NEOPIXEL_PIN, 0, 50, 0); 
   
   mqtt.subscribe(&throttle);
-  ArduinoOTA.begin();
+  if (WiFi.status() == WL_CONNECTED) initOta();
 }
 
 void loop() {
-  ArduinoOTA.handle();
+  if (otaReady) ArduinoOTA.handle();
   yield(); // Important for OS
 
   if (WiFi.status() != WL_CONNECTED && (millis() - lastWifiReconnectAttempt >= WIFI_RECONNECT_INTERVAL_MS)) {
     lastWifiReconnectAttempt = millis();
     Serial.println("[WiFi] Reconnect cycle...");
+    otaReady = false;
     (void)connectWifiWithPriority(WIFI_CONNECT_ATTEMPT_MS);
   }
 
   if (WiFi.status() == WL_CONNECTED) {
+    if (!otaReady) initOta();
     MQTT_connect();
   }
 
