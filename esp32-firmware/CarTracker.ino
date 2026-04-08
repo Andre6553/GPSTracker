@@ -1,4 +1,4 @@
-//ver2.2 4/8/2026 12:03
+//ver2.3 4/8/2026 12:13
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -81,6 +81,7 @@ void loadCustomNetworks();
 bool saveCustomNetwork(const String& ssid, const String& pass);
 bool connectBestCustomNetwork(int scanCount, unsigned long timeoutPerNetworkMs);
 void startConfigPortal();
+bool isAnyKnownNetworkVisible();
 
 bool connectToSsid(const char* ssid, const char* pass, unsigned long timeoutMs) {
   if (!ssid || !ssid[0]) return false;
@@ -288,7 +289,7 @@ void startConfigPortal() {
 
   WiFi.disconnect(true, true);
   delay(100);
-  WiFi.mode(WIFI_AP);
+  WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(apSsid.c_str(), apPass);
   Serial.printf("[CFG] AP mode: %s  IP=%s\n", apSsid.c_str(), WiFi.softAPIP().toString().c_str());
 
@@ -317,8 +318,16 @@ void startConfigPortal() {
 
   configServer.begin();
   const unsigned long start = millis();
+  unsigned long lastKnownScanMs = 0;
   while (!configPortalShouldExit && (millis() - start < 300000UL)) {
     configServer.handleClient();
+    if (millis() - lastKnownScanMs >= 8000UL) {
+      lastKnownScanMs = millis();
+      if (isAnyKnownNetworkVisible()) {
+        Serial.println("[CFG] Known WiFi became available. Exiting AP mode and reconnecting...");
+        configPortalShouldExit = true;
+      }
+    }
     delay(10);
     yield();
   }
@@ -327,6 +336,29 @@ void startConfigPortal() {
   WiFi.mode(WIFI_STA);
   delay(200);
   loadCustomNetworks();
+}
+
+bool isAnyKnownNetworkVisible() {
+  const int n = WiFi.scanNetworks(false, true);
+  const bool seenHotspot =
+    getScanRssiBySsid(WIFI_SPOT_SSID, n) > -1000 || getScanRssiBySsid(WIFE_SPOT_SSID, n) > -1000;
+  const bool seenHome =
+    getScanRssiBySsid(WIFI_HOME_SSID, n) > -1000 ||
+    getScanRssiBySsid(WIFI_HOME2_SSID, n) > -1000
+    #ifdef WIFI_HOME3_SSID
+    || getScanRssiBySsid(WIFI_HOME3_SSID, n) > -1000
+    #endif
+    ;
+  bool seenCustom = false;
+  for (int i = 0; i < MAX_CUSTOM_NETWORKS; i++) {
+    if (customSsids[i].length() == 0) continue;
+    if (getScanRssiBySsid(customSsids[i].c_str(), n) > -1000) {
+      seenCustom = true;
+      break;
+    }
+  }
+  WiFi.scanDelete();
+  return seenHotspot || seenHome || seenCustom;
 }
 
 void setup() {
