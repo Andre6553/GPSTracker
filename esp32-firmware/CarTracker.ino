@@ -1,4 +1,4 @@
-//ver3.4 4/8/2026 16:45
+//ver3.5 4/8/2026 16:50
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -92,20 +92,21 @@ void showOledStatus(const char* title, const String& line1, const String& line2 
 
 void showOledStatus(const char* title, const String& line1, const String& line2, const String& line3) {
   display.clearDisplay();
+  const int headerY = SCREEN_HEIGHT - OLED_COLOR_SPLIT_Y;
   const bool wifiUp = (WiFi.status() == WL_CONNECTED);
   const bool headerLit = wifiUp || (((millis() / OLED_OFFLINE_HEADER_BLINK_MS) % 2) == 0);
   if (headerLit) {
-    display.fillRect(0, 0, SCREEN_WIDTH, OLED_COLOR_SPLIT_Y, SSD1306_WHITE);
+    display.fillRect(0, headerY, SCREEN_WIDTH, OLED_COLOR_SPLIT_Y, SSD1306_WHITE);
   }
   display.setTextSize(1);
   display.setTextColor(headerLit ? SSD1306_BLACK : SSD1306_WHITE);
-  display.setCursor(3, 3);
+  display.setCursor(3, headerY + 3);
   display.print(title);
   display.setTextColor(SSD1306_WHITE);
-  int y = OLED_COLOR_SPLIT_Y + 1;
+  int y = 1;
   const int maxCharsPerRow = SCREEN_WIDTH / 6;  // Default 5x7 font with 1px spacing.
   const int lineHeight = 10;
-  const int maxY = SCREEN_HEIGHT - 8;
+  const int maxY = headerY - 8;
 
   auto drawWrapped = [&](const String& text) {
     if (text.length() == 0) return;
@@ -455,15 +456,16 @@ void setup() {
   // OLED is mounted upside down in enclosure; rotate UI 180 degrees.
   display.setRotation(2);
   display.clearDisplay();
-  display.fillRect(0, 0, SCREEN_WIDTH, OLED_COLOR_SPLIT_Y, SSD1306_WHITE);
+  const int headerY = SCREEN_HEIGHT - OLED_COLOR_SPLIT_Y;
+  display.fillRect(0, headerY, SCREEN_WIDTH, OLED_COLOR_SPLIT_Y, SSD1306_WHITE);
   display.setTextColor(SSD1306_BLACK);
   display.setTextSize(1);
-  display.setCursor(3, 3);
+  display.setCursor(3, headerY + 3);
   display.print(F("CAR TRACKER"));
   display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, OLED_COLOR_SPLIT_Y + 2);
+  display.setCursor(0, 2);
   display.printf("%.16s", DEVICE_ID);
-  display.setCursor(0, OLED_COLOR_SPLIT_Y + 12);
+  display.setCursor(0, 12);
   display.print(F("WiFi / GPS init..."));
   display.display();
 
@@ -654,18 +656,19 @@ void renderDashboardOLED() {
 
   if (showWifiInfoPanel) {
     display.clearDisplay();
+    const int headerY = SCREEN_HEIGHT - OLED_COLOR_SPLIT_Y;
     const bool wifiUp = (WiFi.status() == WL_CONNECTED);
     const bool headerLit = wifiUp || (((millis() / OLED_OFFLINE_HEADER_BLINK_MS) % 2) == 0);
     if (headerLit) {
-      display.fillRect(0, 0, SCREEN_WIDTH, OLED_COLOR_SPLIT_Y, SSD1306_WHITE);
+      display.fillRect(0, headerY, SCREEN_WIDTH, OLED_COLOR_SPLIT_Y, SSD1306_WHITE);
     }
     display.setTextSize(1);
     display.setTextColor(headerLit ? SSD1306_BLACK : SSD1306_WHITE);
-    display.setCursor(3, 3);
+    display.setCursor(3, headerY + 3);
     display.print(F("NET STATUS"));
 
     display.setTextColor(SSD1306_WHITE);
-    int yInfo = OLED_COLOR_SPLIT_Y + 1;
+    int yInfo = 1;
     display.setCursor(0, yInfo);
     display.print(F("STATE "));
     display.print(wifiUp ? F("ONLINE") : F("OFFLINE"));
@@ -706,26 +709,27 @@ void renderDashboardOLED() {
   }
 
   const uint8_t hdrH = OLED_COLOR_SPLIT_Y;
+  const uint8_t hdrY = SCREEN_HEIGHT - hdrH;
   display.clearDisplay();
   const bool wifiUp = (WiFi.status() == WL_CONNECTED);
   const bool headerLit = wifiUp || (((millis() / OLED_OFFLINE_HEADER_BLINK_MS) % 2) == 0);
   if (headerLit) {
-    display.fillRect(0, 0, SCREEN_WIDTH, hdrH, SSD1306_WHITE);
+    display.fillRect(0, hdrY, SCREEN_WIDTH, hdrH, SSD1306_WHITE);
   }
   display.setTextSize(1);
   display.setTextColor(headerLit ? SSD1306_BLACK : SSD1306_WHITE);
-  display.setCursor(3, 3);
+  display.setCursor(3, hdrY + 3);
   display.print(F("TRACKER"));
   char idBanner[20];
   snprintf(idBanner, sizeof idBanner, "%.12s", DEVICE_ID);
   int16_t xId = (int16_t)(SCREEN_WIDTH - 3 - (int)strlen(idBanner) * 6);
   if (xId < 52) xId = 52;
-  display.setCursor(xId, 3);
+  display.setCursor(xId, hdrY + 3);
   display.print(idBanner);
 
   display.setTextColor(SSD1306_WHITE);
-  // First row of body must start below yellow band to avoid clipped / speckled text
-  int y = hdrH + 1;
+  // Keep body in the remaining area above the bottom header strip.
+  int y = 1;
   const bool fix = gps.location.isValid();
   const uint32_t ageMs = fix ? gps.location.age() : 0;
   const bool stale = fix && (ageMs >= MAX_FIX_AGE_MS);
