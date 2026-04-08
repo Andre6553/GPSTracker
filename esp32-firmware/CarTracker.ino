@@ -1,4 +1,4 @@
-//ver1.5 4/8/2026 09:09
+//ver1.6 4/8/2026 09:15
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -86,6 +86,9 @@ bool connectWifiWithPriority(unsigned long timeoutPerNetworkMs) {
   if (connectToSsid(WIFE_SPOT_SSID, WIFE_SPOT_PASS, timeoutPerNetworkMs)) return true;
   if (connectToSsid(WIFI_HOME_SSID, WIFI_HOME_PASS, timeoutPerNetworkMs)) return true;
   if (connectToSsid(WIFI_HOME2_SSID, WIFI_HOME2_PASS, timeoutPerNetworkMs)) return true;
+  #ifdef WIFI_HOME3_SSID
+  if (connectToSsid(WIFI_HOME3_SSID, WIFI_HOME3_PASS, timeoutPerNetworkMs)) return true;
+  #endif
   return false;
 }
 
