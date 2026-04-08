@@ -1,4 +1,4 @@
-//ver1.4 4/8/2026 09:02
+//ver1.5 4/8/2026 09:09
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -41,6 +41,7 @@ HardwareSerial gpsSerial(2);
 unsigned long lastCloudPublish = 0;
 unsigned long lastDisplayUpdate = 0;
 unsigned long lastSyncCheck = 0;
+unsigned long lastWifiReconnectAttempt = 0;
 bool showWifiInfoPanel = false;
 // GPS / cloud / LittleFS log cadence (smoother trails vs storage & bandwidth)
 const unsigned long PUBLISH_INTERVAL = 5000;
@@ -50,6 +51,7 @@ size_t lastSyncOffset = 0;
 // Reject stale coordinates if NMEA hasn't refreshed location (ms). Tunnel / loss-of-lock guard.
 const unsigned long MAX_FIX_AGE_MS = 45000;
 const unsigned long WIFI_CONNECT_ATTEMPT_MS = 10000;
+const unsigned long WIFI_RECONNECT_INTERVAL_MS = 15000;
 
 void MQTT_connect();
 void processOfflineSync();
@@ -137,6 +139,12 @@ void setup() {
 void loop() {
   ArduinoOTA.handle();
   yield(); // Important for OS
+
+  if (WiFi.status() != WL_CONNECTED && (millis() - lastWifiReconnectAttempt >= WIFI_RECONNECT_INTERVAL_MS)) {
+    lastWifiReconnectAttempt = millis();
+    Serial.println("[WiFi] Reconnect cycle...");
+    (void)connectWifiWithPriority(WIFI_CONNECT_ATTEMPT_MS);
+  }
 
   if (WiFi.status() == WL_CONNECTED) {
     MQTT_connect();
