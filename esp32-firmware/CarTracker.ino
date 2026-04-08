@@ -41,6 +41,7 @@ HardwareSerial gpsSerial(2);
 unsigned long lastCloudPublish = 0;
 unsigned long lastDisplayUpdate = 0;
 unsigned long lastSyncCheck = 0;
+bool showWifiInfoPanel = false;
 // GPS / cloud / LittleFS log cadence (smoother trails vs storage & bandwidth)
 const unsigned long PUBLISH_INTERVAL = 5000;
 const unsigned long SYNC_INTERVAL = 15000;
@@ -214,6 +215,52 @@ void loop() {
 
 // Status screen: inverted title bar, fix/SV/HDOP, coords, speed, WiFi RSSI + lock
 void renderDashboardOLED() {
+  // Alternate views every refresh (~5s): normal telemetry, then Wi-Fi status, then back.
+  showWifiInfoPanel = !showWifiInfoPanel;
+
+  if (showWifiInfoPanel) {
+    display.clearDisplay();
+    display.fillRect(0, 0, SCREEN_WIDTH, OLED_COLOR_SPLIT_Y, SSD1306_WHITE);
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_BLACK);
+    display.setCursor(3, 3);
+    display.print(F("NET STATUS"));
+
+    display.setTextColor(SSD1306_WHITE);
+    int yInfo = OLED_COLOR_SPLIT_Y + 1;
+    const bool wifiUp = (WiFi.status() == WL_CONNECTED);
+    display.setCursor(0, yInfo);
+    display.print(F("STATE "));
+    display.print(wifiUp ? F("ONLINE") : F("OFFLINE"));
+    yInfo += 10;
+
+    display.setCursor(0, yInfo);
+    display.print(F("SSID  "));
+    if (wifiUp) {
+      String ssid = WiFi.SSID();
+      if (ssid.length() == 0) ssid = F("(hidden)");
+      if (ssid.length() > 13) ssid = ssid.substring(0, 13);
+      display.print(ssid);
+    } else {
+      display.print(F("-"));
+    }
+    yInfo += 10;
+
+    display.setCursor(0, yInfo);
+    display.print(F("RSSI  "));
+    if (wifiUp) display.printf("%ld dBm", WiFi.RSSI());
+    else display.print(F("-"));
+    yInfo += 10;
+
+    display.setCursor(0, yInfo);
+    display.print(F("IP    "));
+    if (wifiUp) display.print(WiFi.localIP());
+    else display.print(F("-"));
+
+    display.display();
+    return;
+  }
+
   const uint8_t hdrH = OLED_COLOR_SPLIT_Y;
   display.clearDisplay();
   display.fillRect(0, 0, SCREEN_WIDTH, hdrH, SSD1306_WHITE);
