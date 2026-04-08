@@ -1,0 +1,20 @@
+---
+description: Require firmware version/date stamp updates
+globs: esp32-firmware/**/*.ino
+alwaysApply: false
+---
+
+# Firmware Version Stamp Rule
+
+When editing firmware sketches under `esp32-firmware/`, always update the first line version stamp:
+
+`//verX.Y M/D/YYYY HH:MM`
+
+Requirements:
+- Increment `X.Y` for each firmware change.
+- Set date/time to the current local time of the edit.
+- Keep the same updated first line in both files:
+  - `esp32-firmware/CarTracker.ino`
+  - `C:\Users\User\OneDrive\Documents\Arduino\Car Tracker\CarTracker\CarTracker.ino`
+
+Do not finish the task if the two first-line stamps are not identical.

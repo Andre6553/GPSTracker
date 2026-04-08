@@ -1,4 +1,4 @@
-//ver1.3 4/8/2026 14:35
+//ver1.4 4/8/2026 09:02
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
