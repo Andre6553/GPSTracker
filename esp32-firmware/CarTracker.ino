@@ -1,4 +1,4 @@
-//ver3.0 4/8/2026 13:16
+//ver3.1 4/8/2026 13:19
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -61,6 +61,7 @@ const unsigned long WIFI_RECONNECT_INTERVAL_MS = 15000;
 const unsigned long WIFI_PRIORITY_RECHECK_MS = 20000;
 const unsigned long WIFI_CLOUD_CHECK_TIMEOUT_MS = 3000;
 const unsigned long WIFI_FORCE_AP_AFTER_OFFLINE_MS = 60000;
+const int WIFI_MAX_RECONNECT_CYCLES_BEFORE_AP = 2;
 const int MAX_CUSTOM_NETWORKS = 3;
 
 Preferences wifiPrefs;
@@ -496,7 +497,7 @@ void loop() {
       failedReconnectCycles = 0;
       wifiOfflineSinceMs = 0;
     } else {
-      failedReconnectCycles = 4;
+      failedReconnectCycles = WIFI_MAX_RECONNECT_CYCLES_BEFORE_AP;
       Serial.println("[CFG] AP mode ended without WiFi recovery; will keep forcing AP mode.");
     }
     lastWifiReconnectAttempt = millis();
@@ -511,8 +512,8 @@ void loop() {
     const bool reconnected = connectWifiWithPriority(WIFI_CONNECT_ATTEMPT_MS);
     if (!reconnected) {
       failedReconnectCycles++;
-      Serial.printf("[WiFi] Reconnect failed (%d/4)\n", failedReconnectCycles);
-      if (failedReconnectCycles >= 4) {
+      Serial.printf("[WiFi] Reconnect failed (%d/%d)\n", failedReconnectCycles, WIFI_MAX_RECONNECT_CYCLES_BEFORE_AP);
+      if (failedReconnectCycles >= WIFI_MAX_RECONNECT_CYCLES_BEFORE_AP) {
         Serial.println("[CFG] Extended offline. Starting setup AP...");
         const bool portalRecovered = startConfigPortal();
         if (portalRecovered || WiFi.status() == WL_CONNECTED) {
@@ -520,7 +521,7 @@ void loop() {
           wifiOfflineSinceMs = 0;
         } else {
           // Keep threshold reached so we re-enter AP mode on the next cycle until recovered.
-          failedReconnectCycles = 4;
+          failedReconnectCycles = WIFI_MAX_RECONNECT_CYCLES_BEFORE_AP;
           Serial.println("[CFG] AP mode ended without WiFi recovery; will re-enter AP mode.");
         }
       }
