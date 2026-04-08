@@ -1,4 +1,4 @@
-//ver1.9 4/8/2026 10:20
+//ver2.0 4/8/2026 10:56
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -42,6 +42,7 @@ unsigned long lastCloudPublish = 0;
 unsigned long lastDisplayUpdate = 0;
 unsigned long lastSyncCheck = 0;
 unsigned long lastWifiReconnectAttempt = 0;
+unsigned long lastWifiPriorityCheck = 0;
 bool showWifiInfoPanel = false;
 bool otaReady = false;
 // GPS / cloud / LittleFS log cadence (smoother trails vs storage & bandwidth)
@@ -53,6 +54,7 @@ size_t lastSyncOffset = 0;
 const unsigned long MAX_FIX_AGE_MS = 45000;
 const unsigned long WIFI_CONNECT_ATTEMPT_MS = 10000;
 const unsigned long WIFI_RECONNECT_INTERVAL_MS = 15000;
+const unsigned long WIFI_PRIORITY_RECHECK_MS = 20000;
 
 void MQTT_connect();
 void processOfflineSync();
@@ -62,6 +64,7 @@ bool connectToSsid(const char* ssid, const char* pass, unsigned long timeoutMs);
 bool connectWifiWithPriority(unsigned long timeoutPerNetworkMs);
 int getScanRssiBySsid(const char* ssid, int scanCount);
 void initOta();
+bool isCurrentHotspotConnection();
 
 bool connectToSsid(const char* ssid, const char* pass, unsigned long timeoutMs) {
   if (!ssid || !ssid[0]) return false;
@@ -176,6 +179,11 @@ void initOta() {
   Serial.printf("[OTA] Ready: %s.local:%d\n", DEVICE_ID, 3232);
 }
 
+bool isCurrentHotspotConnection() {
+  const String current = WiFi.SSID();
+  return current == String(WIFI_SPOT_SSID) || current == String(WIFE_SPOT_SSID);
+}
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -236,6 +244,25 @@ void loop() {
   }
 
   if (WiFi.status() == WL_CONNECTED) {
+    if (millis() - lastWifiPriorityCheck >= WIFI_PRIORITY_RECHECK_MS) {
+      lastWifiPriorityCheck = millis();
+      // If we're on home Wi-Fi and a hotspot appears, switch immediately without reboot.
+      if (!isCurrentHotspotConnection()) {
+        const int n = WiFi.scanNetworks(false, true);
+        const bool haveScan = n > 0;
+        const int rssiSpot1 = haveScan ? getScanRssiBySsid(WIFI_SPOT_SSID, n) : -1000;
+        const int rssiSpot2 = haveScan ? getScanRssiBySsid(WIFE_SPOT_SSID, n) : -1000;
+        if (rssiSpot1 > -1000 || rssiSpot2 > -1000) {
+          const bool useSpot1 = (rssiSpot1 >= rssiSpot2);
+          const char* targetSpotSsid = useSpot1 ? WIFI_SPOT_SSID : WIFE_SPOT_SSID;
+          const char* targetSpotPass = useSpot1 ? WIFI_SPOT_PASS : WIFE_SPOT_PASS;
+          Serial.printf("[WiFi] Hotspot became available. Switching to %s\n", targetSpotSsid);
+          otaReady = false;
+          (void)connectToSsid(targetSpotSsid, targetSpotPass, WIFI_CONNECT_ATTEMPT_MS);
+        }
+        WiFi.scanDelete();
+      }
+    }
     if (!otaReady) initOta();
     MQTT_connect();
   }
