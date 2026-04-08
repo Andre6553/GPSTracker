@@ -1,4 +1,4 @@
-//ver3.1 4/8/2026 13:19
+//ver3.2 4/8/2026 14:43
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -384,10 +384,21 @@ bool startConfigPortal() {
   delay(20);
   configServer.begin();
   const unsigned long start = millis();
+  unsigned long lastKnownScanMs = 0;
   showOledStatus("AP MODE ACTIVE", "Connect: 192.168.4.1", String("Pass: ") + apPass, apSsid);
   bool recoveredInPortal = false;
+  bool tryReconnectAfterPortal = false;
   while (!configPortalShouldExit && (millis() - start < 300000UL)) {
     configServer.handleClient();
+    if (millis() - lastKnownScanMs >= 10000UL) {
+      lastKnownScanMs = millis();
+      // Only auto-exit AP if nobody is using the setup portal.
+      if (WiFi.softAPgetStationNum() == 0 && isAnyKnownNetworkVisible()) {
+        Serial.println("[CFG] Known WiFi visible and no AP clients. Leaving AP to reconnect...");
+        tryReconnectAfterPortal = true;
+        configPortalShouldExit = true;
+      }
+    }
     delay(10);
     yield();
   }
@@ -395,6 +406,9 @@ bool startConfigPortal() {
   WiFi.softAPdisconnect(true);
   WiFi.mode(WIFI_STA);
   delay(200);
+  if (tryReconnectAfterPortal) {
+    recoveredInPortal = connectWifiWithPriority(WIFI_CONNECT_ATTEMPT_MS);
+  }
   loadCustomNetworks();
   configPortalActive = false;
   return recoveredInPortal || (WiFi.status() == WL_CONNECTED);
