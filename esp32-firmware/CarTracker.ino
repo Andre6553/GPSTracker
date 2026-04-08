@@ -1,4 +1,4 @@
-//ver2.8 4/8/2026 13:01
+//ver2.9 4/8/2026 13:10
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -68,6 +68,8 @@ WebServer configServer(80);
 String customSsids[MAX_CUSTOM_NETWORKS];
 String customPasses[MAX_CUSTOM_NETWORKS];
 bool configPortalShouldExit = false;
+bool configPortalActive = false;
+bool configRoutesInitialized = false;
 
 void MQTT_connect();
 void processOfflineSync();
@@ -322,6 +324,11 @@ bool saveCustomNetwork(const String& ssid, const String& pass) {
 }
 
 bool startConfigPortal() {
+  if (configPortalActive) {
+    Serial.println("[CFG] AP portal already active; skipping re-entry.");
+    return WiFi.status() == WL_CONNECTED;
+  }
+  configPortalActive = true;
   const String apSsid = String(DEVICE_ID) + "-Setup";
   const char* apPass = "setup1234";
   configPortalShouldExit = false;
@@ -332,39 +339,44 @@ bool startConfigPortal() {
   WiFi.softAP(apSsid.c_str(), apPass);
   Serial.printf("[CFG] AP mode: %s  IP=%s\n", apSsid.c_str(), WiFi.softAPIP().toString().c_str());
 
-  configServer.on("/", HTTP_GET, []() {
-    const int n = WiFi.scanNetworks(false, true);
-    String options = "";
-    for (int i = 0; i < n; i++) {
-      const String s = WiFi.SSID(i);
-      if (s.length() == 0) continue;
-      options += "<option value='" + s + "'>" + s + " (" + String(WiFi.RSSI(i)) + " dBm)</option>";
-    }
-    WiFi.scanDelete();
-    String html =
-      "<!doctype html><html><body><h2>ESP32 WiFi Setup</h2>"
-      "<p>AP is active because normal WiFi failed.</p>"
-      "<form method='POST' action='/save'>"
-      "Select SSID:<br><select name='ssid'>" + options + "</select><br>"
-      "Or type SSID:<br><input name='ssid_custom' maxlength='64'><br>"
-      "Password:<br><input name='pass' type='password' maxlength='64'><br><br>"
-      "<button type='submit'>Save & Connect</button>"
-      "</form></body></html>";
-    configServer.send(200, "text/html", html);
-  });
+  if (!configRoutesInitialized) {
+    configServer.on("/", HTTP_GET, []() {
+      const int n = WiFi.scanNetworks(false, true);
+      String options = "";
+      for (int i = 0; i < n; i++) {
+        const String s = WiFi.SSID(i);
+        if (s.length() == 0) continue;
+        options += "<option value='" + s + "'>" + s + " (" + String(WiFi.RSSI(i)) + " dBm)</option>";
+      }
+      WiFi.scanDelete();
+      String html =
+        "<!doctype html><html><body><h2>ESP32 WiFi Setup</h2>"
+        "<p>AP is active because normal WiFi failed.</p>"
+        "<form method='POST' action='/save'>"
+        "Select SSID:<br><select name='ssid'>" + options + "</select><br>"
+        "Or type SSID:<br><input name='ssid_custom' maxlength='64'><br>"
+        "Password:<br><input name='pass' type='password' maxlength='64'><br><br>"
+        "<button type='submit'>Save & Connect</button>"
+        "</form></body></html>";
+      configServer.send(200, "text/html", html);
+    });
 
-  configServer.on("/save", HTTP_POST, []() {
-    String ssid = configServer.arg("ssid_custom");
-    if (ssid.length() == 0) ssid = configServer.arg("ssid");
-    const String pass = configServer.arg("pass");
-    if (saveCustomNetwork(ssid, pass)) {
-      configServer.send(200, "text/html", "<h3>Saved. Device is reconnecting...</h3>");
-      configPortalShouldExit = true;
-    } else {
-      configServer.send(400, "text/html", "<h3>Invalid SSID.</h3>");
-    }
-  });
+    configServer.on("/save", HTTP_POST, []() {
+      String ssid = configServer.arg("ssid_custom");
+      if (ssid.length() == 0) ssid = configServer.arg("ssid");
+      const String pass = configServer.arg("pass");
+      if (saveCustomNetwork(ssid, pass)) {
+        configServer.send(200, "text/html", "<h3>Saved. Device is reconnecting...</h3>");
+        configPortalShouldExit = true;
+      } else {
+        configServer.send(400, "text/html", "<h3>Invalid SSID.</h3>");
+      }
+    });
+    configRoutesInitialized = true;
+  }
 
+  configServer.stop();
+  delay(20);
   configServer.begin();
   const unsigned long start = millis();
   unsigned long lastKnownScanMs = 0;
@@ -399,6 +411,7 @@ bool startConfigPortal() {
   WiFi.mode(WIFI_STA);
   delay(200);
   loadCustomNetworks();
+  configPortalActive = false;
   return recoveredInPortal || (WiFi.status() == WL_CONNECTED);
 }
 
