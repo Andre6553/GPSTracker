@@ -1,4 +1,4 @@
-//ver2.4 4/8/2026 12:26
+//ver2.6 4/8/2026 12:38
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -93,18 +93,26 @@ void showOledStatus(const char* title, const String& line1, const String& line2,
   display.print(title);
   display.setTextColor(SSD1306_WHITE);
   int y = OLED_COLOR_SPLIT_Y + 1;
-  display.setCursor(0, y);
-  display.print(line1);
-  y += 10;
-  if (line2.length() > 0) {
-    display.setCursor(0, y);
-    display.print(line2);
-    y += 10;
-  }
-  if (line3.length() > 0) {
-    display.setCursor(0, y);
-    display.print(line3);
-  }
+  const int maxCharsPerRow = SCREEN_WIDTH / 6;  // Default 5x7 font with 1px spacing.
+  const int lineHeight = 10;
+  const int maxY = SCREEN_HEIGHT - 8;
+
+  auto drawWrapped = [&](const String& text) {
+    if (text.length() == 0) return;
+    int start = 0;
+    while (start < text.length() && y <= maxY) {
+      int remaining = text.length() - start;
+      int take = remaining < maxCharsPerRow ? remaining : maxCharsPerRow;
+      display.setCursor(0, y);
+      display.print(text.substring(start, start + take));
+      y += lineHeight;
+      start += take;
+    }
+  };
+
+  drawWrapped(line1);
+  drawWrapped(line2);
+  drawWrapped(line3);
   display.display();
 }
 
@@ -364,8 +372,19 @@ void startConfigPortal() {
     if (millis() - lastKnownScanMs >= 8000UL) {
       lastKnownScanMs = millis();
       if (isAnyKnownNetworkVisible()) {
-        Serial.println("[CFG] Known WiFi became available. Exiting AP mode and reconnecting...");
-        configPortalShouldExit = true;
+        Serial.println("[CFG] Known WiFi visible. Testing reconnect...");
+        WiFi.softAPdisconnect(true);
+        WiFi.mode(WIFI_STA);
+        const bool recovered = connectWifiWithPriority(WIFI_CONNECT_ATTEMPT_MS);
+        if (recovered) {
+          Serial.println("[CFG] Reconnect succeeded. Leaving AP mode.");
+          configPortalShouldExit = true;
+          break;
+        }
+        Serial.println("[CFG] Reconnect test failed. Restoring AP mode.");
+        WiFi.mode(WIFI_AP_STA);
+        WiFi.softAP(apSsid.c_str(), apPass);
+        showOledStatus("AP MODE ACTIVE", "Connect: 192.168.4.1", String("Pass: ") + apPass, apSsid);
       }
     }
     delay(10);
