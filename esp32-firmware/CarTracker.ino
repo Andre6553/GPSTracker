@@ -1,4 +1,4 @@
-//ver2.9 4/8/2026 13:10
+//ver3.0 4/8/2026 13:16
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -333,8 +333,12 @@ bool startConfigPortal() {
   const char* apPass = "setup1234";
   configPortalShouldExit = false;
 
+  // Tear down active network clients before AP transition.
+  mqtt.disconnect();
+  client.stop();
+  configServer.stop();
   WiFi.disconnect(true, true);
-  delay(100);
+  delay(200);
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(apSsid.c_str(), apPass);
   Serial.printf("[CFG] AP mode: %s  IP=%s\n", apSsid.c_str(), WiFi.softAPIP().toString().c_str());
@@ -379,30 +383,10 @@ bool startConfigPortal() {
   delay(20);
   configServer.begin();
   const unsigned long start = millis();
-  unsigned long lastKnownScanMs = 0;
   showOledStatus("AP MODE ACTIVE", "Connect: 192.168.4.1", String("Pass: ") + apPass, apSsid);
   bool recoveredInPortal = false;
   while (!configPortalShouldExit && (millis() - start < 300000UL)) {
     configServer.handleClient();
-    if (millis() - lastKnownScanMs >= 8000UL) {
-      lastKnownScanMs = millis();
-      if (isAnyKnownNetworkVisible()) {
-        Serial.println("[CFG] Known WiFi visible. Testing reconnect...");
-        WiFi.softAPdisconnect(true);
-        WiFi.mode(WIFI_STA);
-        const bool recovered = connectWifiWithPriority(WIFI_CONNECT_ATTEMPT_MS);
-        if (recovered) {
-          Serial.println("[CFG] Reconnect succeeded. Leaving AP mode.");
-          recoveredInPortal = true;
-          configPortalShouldExit = true;
-          break;
-        }
-        Serial.println("[CFG] Reconnect test failed. Restoring AP mode.");
-        WiFi.mode(WIFI_AP_STA);
-        WiFi.softAP(apSsid.c_str(), apPass);
-        showOledStatus("AP MODE ACTIVE", "Connect: 192.168.4.1", String("Pass: ") + apPass, apSsid);
-      }
-    }
     delay(10);
     yield();
   }
