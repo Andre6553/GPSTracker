@@ -1,4 +1,4 @@
-//ver2.3 4/8/2026 12:13
+//ver2.4 4/8/2026 12:26
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -82,10 +82,36 @@ bool saveCustomNetwork(const String& ssid, const String& pass);
 bool connectBestCustomNetwork(int scanCount, unsigned long timeoutPerNetworkMs);
 void startConfigPortal();
 bool isAnyKnownNetworkVisible();
+void showOledStatus(const char* title, const String& line1, const String& line2 = "", const String& line3 = "");
+
+void showOledStatus(const char* title, const String& line1, const String& line2, const String& line3) {
+  display.clearDisplay();
+  display.fillRect(0, 0, SCREEN_WIDTH, OLED_COLOR_SPLIT_Y, SSD1306_WHITE);
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_BLACK);
+  display.setCursor(3, 3);
+  display.print(title);
+  display.setTextColor(SSD1306_WHITE);
+  int y = OLED_COLOR_SPLIT_Y + 1;
+  display.setCursor(0, y);
+  display.print(line1);
+  y += 10;
+  if (line2.length() > 0) {
+    display.setCursor(0, y);
+    display.print(line2);
+    y += 10;
+  }
+  if (line3.length() > 0) {
+    display.setCursor(0, y);
+    display.print(line3);
+  }
+  display.display();
+}
 
 bool connectToSsid(const char* ssid, const char* pass, unsigned long timeoutMs) {
   if (!ssid || !ssid[0]) return false;
   Serial.printf("\n[WiFi] Trying: %s\n", ssid);
+  showOledStatus("WIFI CONNECT", String("Trying: ") + ssid, "Please wait...");
   WiFi.disconnect(true, true);
   delay(100);
   WiFi.begin(ssid, pass);
@@ -97,8 +123,10 @@ bool connectToSsid(const char* ssid, const char* pass, unsigned long timeoutMs) 
   }
   if (WiFi.status() == WL_CONNECTED) {
     Serial.printf("\n[WiFi] Connected: %s RSSI=%ld\n", WiFi.SSID().c_str(), WiFi.RSSI());
+    showOledStatus("WIFI CONNECT", "Connected:", WiFi.SSID(), String("RSSI ") + String(WiFi.RSSI()));
     if (!hasCloudReachability()) {
       Serial.println("[WiFi] Connected SSID has no cloud reachability. Trying next network...");
+      showOledStatus("WIFI CONNECT", "No cloud on:", WiFi.SSID(), "Trying next...");
       WiFi.disconnect(true, true);
       delay(100);
       return false;
@@ -159,6 +187,7 @@ int getScanRssiBySsid(const char* ssid, int scanCount) {
 bool connectWifiWithPriority(unsigned long timeoutPerNetworkMs) {
   // Rule: if hotspot is available, always use hotspot; otherwise pick strongest home Wi-Fi.
   Serial.println("[WiFi] Scanning nearby networks...");
+  showOledStatus("WIFI SCAN", "Looking hotspots...", "Looking known WiFi...");
   const int n = WiFi.scanNetworks(false, true);
   const bool haveScan = n > 0;
 
@@ -294,11 +323,20 @@ void startConfigPortal() {
   Serial.printf("[CFG] AP mode: %s  IP=%s\n", apSsid.c_str(), WiFi.softAPIP().toString().c_str());
 
   configServer.on("/", HTTP_GET, []() {
+    const int n = WiFi.scanNetworks(false, true);
+    String options = "";
+    for (int i = 0; i < n; i++) {
+      const String s = WiFi.SSID(i);
+      if (s.length() == 0) continue;
+      options += "<option value='" + s + "'>" + s + " (" + String(WiFi.RSSI(i)) + " dBm)</option>";
+    }
+    WiFi.scanDelete();
     String html =
       "<!doctype html><html><body><h2>ESP32 WiFi Setup</h2>"
       "<p>AP is active because normal WiFi failed.</p>"
       "<form method='POST' action='/save'>"
-      "SSID:<br><input name='ssid' maxlength='64'><br>"
+      "Select SSID:<br><select name='ssid'>" + options + "</select><br>"
+      "Or type SSID:<br><input name='ssid_custom' maxlength='64'><br>"
       "Password:<br><input name='pass' type='password' maxlength='64'><br><br>"
       "<button type='submit'>Save & Connect</button>"
       "</form></body></html>";
@@ -306,7 +344,8 @@ void startConfigPortal() {
   });
 
   configServer.on("/save", HTTP_POST, []() {
-    const String ssid = configServer.arg("ssid");
+    String ssid = configServer.arg("ssid_custom");
+    if (ssid.length() == 0) ssid = configServer.arg("ssid");
     const String pass = configServer.arg("pass");
     if (saveCustomNetwork(ssid, pass)) {
       configServer.send(200, "text/html", "<h3>Saved. Device is reconnecting...</h3>");
@@ -319,6 +358,7 @@ void startConfigPortal() {
   configServer.begin();
   const unsigned long start = millis();
   unsigned long lastKnownScanMs = 0;
+  showOledStatus("AP MODE ACTIVE", "Connect: 192.168.4.1", String("Pass: ") + apPass, apSsid);
   while (!configPortalShouldExit && (millis() - start < 300000UL)) {
     configServer.handleClient();
     if (millis() - lastKnownScanMs >= 8000UL) {
