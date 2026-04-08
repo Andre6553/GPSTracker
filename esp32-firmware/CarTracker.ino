@@ -1,4 +1,4 @@
-//ver2.6 4/8/2026 12:38
+//ver2.7 4/8/2026 12:47
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -80,7 +80,7 @@ bool hasCloudReachability();
 void loadCustomNetworks();
 bool saveCustomNetwork(const String& ssid, const String& pass);
 bool connectBestCustomNetwork(int scanCount, unsigned long timeoutPerNetworkMs);
-void startConfigPortal();
+bool startConfigPortal();
 bool isAnyKnownNetworkVisible();
 void showOledStatus(const char* title, const String& line1, const String& line2 = "", const String& line3 = "");
 
@@ -319,7 +319,7 @@ bool saveCustomNetwork(const String& ssid, const String& pass) {
   return true;
 }
 
-void startConfigPortal() {
+bool startConfigPortal() {
   const String apSsid = String(DEVICE_ID) + "-Setup";
   const char* apPass = "setup1234";
   configPortalShouldExit = false;
@@ -367,6 +367,7 @@ void startConfigPortal() {
   const unsigned long start = millis();
   unsigned long lastKnownScanMs = 0;
   showOledStatus("AP MODE ACTIVE", "Connect: 192.168.4.1", String("Pass: ") + apPass, apSsid);
+  bool recoveredInPortal = false;
   while (!configPortalShouldExit && (millis() - start < 300000UL)) {
     configServer.handleClient();
     if (millis() - lastKnownScanMs >= 8000UL) {
@@ -378,6 +379,7 @@ void startConfigPortal() {
         const bool recovered = connectWifiWithPriority(WIFI_CONNECT_ATTEMPT_MS);
         if (recovered) {
           Serial.println("[CFG] Reconnect succeeded. Leaving AP mode.");
+          recoveredInPortal = true;
           configPortalShouldExit = true;
           break;
         }
@@ -395,6 +397,7 @@ void startConfigPortal() {
   WiFi.mode(WIFI_STA);
   delay(200);
   loadCustomNetworks();
+  return recoveredInPortal || (WiFi.status() == WL_CONNECTED);
 }
 
 bool isAnyKnownNetworkVisible() {
@@ -447,8 +450,8 @@ void setup() {
   bool wifiOk = connectWifiWithPriority(WIFI_CONNECT_ATTEMPT_MS);
   if (!wifiOk) {
     Serial.println("[CFG] No usable WiFi. Starting setup AP...");
-    startConfigPortal();
-    wifiOk = connectWifiWithPriority(WIFI_CONNECT_ATTEMPT_MS);
+    const bool portalRecovered = startConfigPortal();
+    wifiOk = portalRecovered || connectWifiWithPriority(WIFI_CONNECT_ATTEMPT_MS);
   }
   if (wifiOk) {
     Serial.println("\nWiFi OK!");
@@ -485,10 +488,17 @@ void loop() {
     const bool reconnected = connectWifiWithPriority(WIFI_CONNECT_ATTEMPT_MS);
     if (!reconnected) {
       failedReconnectCycles++;
+      Serial.printf("[WiFi] Reconnect failed (%d/4)\n", failedReconnectCycles);
       if (failedReconnectCycles >= 4) {
         Serial.println("[CFG] Extended offline. Starting setup AP...");
-        startConfigPortal();
-        failedReconnectCycles = 0;
+        const bool portalRecovered = startConfigPortal();
+        if (portalRecovered || WiFi.status() == WL_CONNECTED) {
+          failedReconnectCycles = 0;
+        } else {
+          // Keep threshold reached so we re-enter AP mode on the next cycle until recovered.
+          failedReconnectCycles = 4;
+          Serial.println("[CFG] AP mode ended without WiFi recovery; will re-enter AP mode.");
+        }
       }
     } else {
       failedReconnectCycles = 0;
