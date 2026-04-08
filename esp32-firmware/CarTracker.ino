@@ -1,4 +1,4 @@
-//ver2.7 4/8/2026 12:47
+//ver2.8 4/8/2026 13:01
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -45,6 +45,7 @@ unsigned long lastDisplayUpdate = 0;
 unsigned long lastSyncCheck = 0;
 unsigned long lastWifiReconnectAttempt = 0;
 unsigned long lastWifiPriorityCheck = 0;
+unsigned long wifiOfflineSinceMs = 0;
 bool showWifiInfoPanel = false;
 bool otaReady = false;
 int failedReconnectCycles = 0;
@@ -59,6 +60,7 @@ const unsigned long WIFI_CONNECT_ATTEMPT_MS = 10000;
 const unsigned long WIFI_RECONNECT_INTERVAL_MS = 15000;
 const unsigned long WIFI_PRIORITY_RECHECK_MS = 20000;
 const unsigned long WIFI_CLOUD_CHECK_TIMEOUT_MS = 3000;
+const unsigned long WIFI_FORCE_AP_AFTER_OFFLINE_MS = 60000;
 const int MAX_CUSTOM_NETWORKS = 3;
 
 Preferences wifiPrefs;
@@ -481,7 +483,31 @@ void loop() {
   if (otaReady) ArduinoOTA.handle();
   yield(); // Important for OS
 
-  if (WiFi.status() != WL_CONNECTED && (millis() - lastWifiReconnectAttempt >= WIFI_RECONNECT_INTERVAL_MS)) {
+  if (WiFi.status() != WL_CONNECTED) {
+    if (wifiOfflineSinceMs == 0) wifiOfflineSinceMs = millis();
+  } else {
+    wifiOfflineSinceMs = 0;
+  }
+
+  const bool offlineTooLong =
+    (wifiOfflineSinceMs != 0) && (millis() - wifiOfflineSinceMs >= WIFI_FORCE_AP_AFTER_OFFLINE_MS);
+
+  if (offlineTooLong) {
+    Serial.println("[CFG] Offline too long. Forcing setup AP mode...");
+    const bool portalRecovered = startConfigPortal();
+    if (portalRecovered || WiFi.status() == WL_CONNECTED) {
+      failedReconnectCycles = 0;
+      wifiOfflineSinceMs = 0;
+    } else {
+      failedReconnectCycles = 4;
+      Serial.println("[CFG] AP mode ended without WiFi recovery; will keep forcing AP mode.");
+    }
+    lastWifiReconnectAttempt = millis();
+  }
+
+  if (WiFi.status() != WL_CONNECTED &&
+      !offlineTooLong &&
+      (millis() - lastWifiReconnectAttempt >= WIFI_RECONNECT_INTERVAL_MS)) {
     lastWifiReconnectAttempt = millis();
     Serial.println("[WiFi] Reconnect cycle...");
     otaReady = false;
@@ -494,6 +520,7 @@ void loop() {
         const bool portalRecovered = startConfigPortal();
         if (portalRecovered || WiFi.status() == WL_CONNECTED) {
           failedReconnectCycles = 0;
+          wifiOfflineSinceMs = 0;
         } else {
           // Keep threshold reached so we re-enter AP mode on the next cycle until recovered.
           failedReconnectCycles = 4;
