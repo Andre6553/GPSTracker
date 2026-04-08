@@ -1,4 +1,4 @@
-//ver3.3 4/8/2026 15:06
+//ver3.4 4/8/2026 16:45
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -452,6 +452,8 @@ void setup() {
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println(F("OLED Failed"));
   }
+  // OLED is mounted upside down in enclosure; rotate UI 180 degrees.
+  display.setRotation(2);
   display.clearDisplay();
   display.fillRect(0, 0, SCREEN_WIDTH, OLED_COLOR_SPLIT_Y, SSD1306_WHITE);
   display.setTextColor(SSD1306_BLACK);
