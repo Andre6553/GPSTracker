@@ -1,4 +1,4 @@
-//ver3.2 4/8/2026 14:43
+//ver3.3 4/8/2026 15:06
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -61,6 +61,7 @@ const unsigned long WIFI_RECONNECT_INTERVAL_MS = 15000;
 const unsigned long WIFI_PRIORITY_RECHECK_MS = 20000;
 const unsigned long WIFI_CLOUD_CHECK_TIMEOUT_MS = 3000;
 const unsigned long WIFI_FORCE_AP_AFTER_OFFLINE_MS = 60000;
+const unsigned long OLED_OFFLINE_HEADER_BLINK_MS = 500;
 const int WIFI_MAX_RECONNECT_CYCLES_BEFORE_AP = 2;
 const int MAX_CUSTOM_NETWORKS = 3;
 
@@ -91,9 +92,13 @@ void showOledStatus(const char* title, const String& line1, const String& line2 
 
 void showOledStatus(const char* title, const String& line1, const String& line2, const String& line3) {
   display.clearDisplay();
-  display.fillRect(0, 0, SCREEN_WIDTH, OLED_COLOR_SPLIT_Y, SSD1306_WHITE);
+  const bool wifiUp = (WiFi.status() == WL_CONNECTED);
+  const bool headerLit = wifiUp || (((millis() / OLED_OFFLINE_HEADER_BLINK_MS) % 2) == 0);
+  if (headerLit) {
+    display.fillRect(0, 0, SCREEN_WIDTH, OLED_COLOR_SPLIT_Y, SSD1306_WHITE);
+  }
   display.setTextSize(1);
-  display.setTextColor(SSD1306_BLACK);
+  display.setTextColor(headerLit ? SSD1306_BLACK : SSD1306_WHITE);
   display.setCursor(3, 3);
   display.print(title);
   display.setTextColor(SSD1306_WHITE);
@@ -647,15 +652,18 @@ void renderDashboardOLED() {
 
   if (showWifiInfoPanel) {
     display.clearDisplay();
-    display.fillRect(0, 0, SCREEN_WIDTH, OLED_COLOR_SPLIT_Y, SSD1306_WHITE);
+    const bool wifiUp = (WiFi.status() == WL_CONNECTED);
+    const bool headerLit = wifiUp || (((millis() / OLED_OFFLINE_HEADER_BLINK_MS) % 2) == 0);
+    if (headerLit) {
+      display.fillRect(0, 0, SCREEN_WIDTH, OLED_COLOR_SPLIT_Y, SSD1306_WHITE);
+    }
     display.setTextSize(1);
-    display.setTextColor(SSD1306_BLACK);
+    display.setTextColor(headerLit ? SSD1306_BLACK : SSD1306_WHITE);
     display.setCursor(3, 3);
     display.print(F("NET STATUS"));
 
     display.setTextColor(SSD1306_WHITE);
     int yInfo = OLED_COLOR_SPLIT_Y + 1;
-    const bool wifiUp = (WiFi.status() == WL_CONNECTED);
     display.setCursor(0, yInfo);
     display.print(F("STATE "));
     display.print(wifiUp ? F("ONLINE") : F("OFFLINE"));
@@ -697,9 +705,13 @@ void renderDashboardOLED() {
 
   const uint8_t hdrH = OLED_COLOR_SPLIT_Y;
   display.clearDisplay();
-  display.fillRect(0, 0, SCREEN_WIDTH, hdrH, SSD1306_WHITE);
+  const bool wifiUp = (WiFi.status() == WL_CONNECTED);
+  const bool headerLit = wifiUp || (((millis() / OLED_OFFLINE_HEADER_BLINK_MS) % 2) == 0);
+  if (headerLit) {
+    display.fillRect(0, 0, SCREEN_WIDTH, hdrH, SSD1306_WHITE);
+  }
   display.setTextSize(1);
-  display.setTextColor(SSD1306_BLACK);
+  display.setTextColor(headerLit ? SSD1306_BLACK : SSD1306_WHITE);
   display.setCursor(3, 3);
   display.print(F("TRACKER"));
   char idBanner[20];
