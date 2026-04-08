@@ -1,4 +1,4 @@
-//ver1.2 3/25/2026 20:40
+//ver1.3 4/8/2026 14:35
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Arduino.h>
@@ -9,7 +9,6 @@
 #include <LittleFS.h>
 #include <TinyGPSPlus.h>
 #include <WiFi.h>
-#include <WiFiMulti.h>
 #include <Wire.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
@@ -22,7 +21,6 @@
 #define AIO_SERVER "io.adafruit.com"
 #define AIO_SERVERPORT 1883
 
-WiFiMulti wifiMulti;
 WiFiClient client;
 Adafruit_MQTT_Client mqtt(&client, AIO_SERVER, AIO_SERVERPORT, AIO_USERNAME, AIO_KEY);
 Adafruit_MQTT_Publish carTracker = Adafruit_MQTT_Publish(&mqtt, AIO_USERNAME "/feeds/cartracker2.csv");
@@ -50,11 +48,43 @@ size_t lastSyncOffset = 0;
 
 // Reject stale coordinates if NMEA hasn't refreshed location (ms). Tunnel / loss-of-lock guard.
 const unsigned long MAX_FIX_AGE_MS = 45000;
+const unsigned long WIFI_CONNECT_ATTEMPT_MS = 10000;
 
 void MQTT_connect();
 void processOfflineSync();
 bool pushToSupabase(double lat, double lon, double speed, double alt, int sats, const char* timestamp = nullptr);
 void renderDashboardOLED();
+bool connectToSsid(const char* ssid, const char* pass, unsigned long timeoutMs);
+bool connectWifiWithPriority(unsigned long timeoutPerNetworkMs);
+
+bool connectToSsid(const char* ssid, const char* pass, unsigned long timeoutMs) {
+  if (!ssid || !ssid[0]) return false;
+  Serial.printf("\n[WiFi] Trying: %s\n", ssid);
+  WiFi.disconnect(true, true);
+  delay(100);
+  WiFi.begin(ssid, pass);
+  const unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) {
+    delay(300);
+    Serial.print(".");
+    yield();
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("\n[WiFi] Connected: %s RSSI=%ld\n", WiFi.SSID().c_str(), WiFi.RSSI());
+    return true;
+  }
+  Serial.println("\n[WiFi] Failed");
+  return false;
+}
+
+bool connectWifiWithPriority(unsigned long timeoutPerNetworkMs) {
+  // Priority order: hotspots first, then home Wi-Fi.
+  if (connectToSsid(WIFI_SPOT_SSID, WIFI_SPOT_PASS, timeoutPerNetworkMs)) return true;
+  if (connectToSsid(WIFE_SPOT_SSID, WIFE_SPOT_PASS, timeoutPerNetworkMs)) return true;
+  if (connectToSsid(WIFI_HOME_SSID, WIFI_HOME_PASS, timeoutPerNetworkMs)) return true;
+  if (connectToSsid(WIFI_HOME2_SSID, WIFI_HOME2_PASS, timeoutPerNetworkMs)) return true;
+  return false;
+}
 
 void setup() {
   Serial.begin(115200);
@@ -77,20 +107,9 @@ void setup() {
   display.print(F("WiFi / GPS init..."));
   display.display();
 
-  wifiMulti.addAP(WIFI_HOME_SSID, WIFI_HOME_PASS);
-  wifiMulti.addAP(WIFI_HOME2_SSID, WIFI_HOME2_PASS);
-  wifiMulti.addAP(WIFI_SPOT_SSID, WIFI_SPOT_PASS);
-  wifiMulti.addAP(WIFE_SPOT_SSID, WIFE_SPOT_PASS);
-
   Serial.println("Connecting WiFi...");
-  unsigned long start = millis();
-  while (wifiMulti.run() != WL_CONNECTED && millis() - start < 10000) {
-    delay(500); 
-    Serial.print(".");
-    yield(); // Keep watchdog alive during WiFi wait
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
+  const bool wifiOk = connectWifiWithPriority(WIFI_CONNECT_ATTEMPT_MS);
+  if (wifiOk) {
     Serial.println("\nWiFi OK!");
   } else {
     Serial.println("\nWiFi Offline");
