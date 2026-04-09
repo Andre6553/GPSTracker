@@ -158,6 +158,21 @@ function isImplausibleTrailSegment(a: TelemetryPoint, b: TelemetryPoint): boolea
   return true;
 }
 
+function getHomeGeofence(geofences: Geofence[]): Geofence | null {
+  return geofences.find((g) => /(^|\b)home(\b|$)/i.test(String(g.name ?? "").trim())) ?? null;
+}
+
+function isPointInsideGeofence(point: TelemetryPoint, geofence: Geofence): boolean {
+  return (
+    haversineMeters(
+      Number(point.lat),
+      Number(point.lon),
+      Number(geofence.lat),
+      Number(geofence.lon)
+    ) <= Number(geofence.radius_meters)
+  );
+}
+
 const TRAIL_ARROW_IMAGE_ID = "trail-arrow";
 
 /** Points north (up) in canvas space; rotated by `bearing` in symbol layer. */
@@ -1071,11 +1086,15 @@ export default function Map({
       const sortedHistory = [...hist].sort(
         (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
       );
+      const homeGeofence = getHomeGeofence(geofencesRef.current);
+      const isInsideHomeZone = (point: TelemetryPoint) =>
+        homeGeofence ? isPointInsideGeofence(point, homeGeofence) : false;
 
       const lineFeatures: GeoJSON.Feature<GeoJSON.LineString>[] = [];
       for (let i = 0; i < sortedHistory.length - 1; i++) {
         const start = sortedHistory[i];
         const end = sortedHistory[i + 1];
+        if (isInsideHomeZone(start) || isInsideHomeZone(end)) continue;
         if (isImplausibleTrailSegment(start, end)) continue;
 
         const lonA = Number(start.lon),
@@ -1098,6 +1117,7 @@ export default function Map({
         for (let i = 0; i < sortedHistory.length - 1; i++) {
           const start = sortedHistory[i],
             end = sortedHistory[i + 1];
+          if (isInsideHomeZone(start) || isInsideHomeZone(end)) continue;
           const lonA = Number(start.lon),
             latA = Number(start.lat);
           const lonB = Number(end.lon),
@@ -1119,6 +1139,7 @@ export default function Map({
 
       for (let i = 0; i < n; i++) {
         const p = sortedHistory[i];
+        if (isInsideHomeZone(p)) continue;
         const lon = Number(p.lon);
         const lat = Number(p.lat);
         if (isNaN(lon) || isNaN(lat)) continue;
