@@ -1,0 +1,17 @@
+---
+description: When changing code, always provide full copy-paste-ready content
+alwaysApply: true
+---
+
+# Full copy-paste on code changes
+
+When this task **changes** or **proposes changes** to project code, config, YAML, SQL, scripts, or any file the user would paste or save:
+
+1. **Prefer complete artifacts** — Give the **full** updated file, **or** a **complete** replaceable block (e.g. entire `views:` array, entire card definition, entire function/module) that is valid on its own, not only a minimal diff or scattered snippets.
+2. **Label what to replace** — Say clearly what the block replaces (e.g. “Replace your entire `views:` key with the following”).
+3. **Multi-file work** — Provide **full content per file** (or one clearly bounded block per file), not a mix of partial inserts unless the user explicitly asked for a patch-only format.
+4. **External / one-off configs** — Home Assistant YAML, Arduino snippets, etc. follow the same rule: supply **full** paste-ready YAML when the change touches more than a single obvious line.
+
+**Exceptions (rare):** A **single-line** fix where the location is unambiguous (exact file + line) may be shown as one line; otherwise default to full context.
+
+This does not replace other project rules (e.g. git push, firmware mirror).
